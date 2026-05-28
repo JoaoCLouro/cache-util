@@ -35,7 +35,7 @@
   
 ; Changeable Values:
 
-  CACHE_WAYS EQU 4
+  CACHE_WAYS EQU 4        ; Changing the number of cache cells per block requires major rework on read and write algorithms
   CACHE_SIZE EQU 16777216
 
   CACHE_LINES       EQU (CACHE_SIZE / CACHE_BLOCK_SIZE)   ; 262144 lines
@@ -56,9 +56,9 @@ cache_tags:       resb (CACHE_TAG_BITS * CACHE_WAYS * CACHE_LINES)
 cache_buffer:     resb CACHE_SIZE
 
 section .text
-global _init
-global _read_cache
-global _write_cache
+global init
+global read_cache
+global write_cache
 
 ; To Implement
 ;   WRITE CACHE
@@ -66,14 +66,14 @@ global _write_cache
 
 
 ; -----------------------------------------------------
-; _start:
+; init:
 ;       Returns a validation address to the cache
 ; Outputs:
 ;       RAX: address to use to access the cache
 ; Destoys: 
 ;       RAX
 ; -----------------------------------------------------
-    _init:
+    init:
         ; gets a random value in the to randomize the address
         xor RAX
         call _get_rand_val
@@ -82,7 +82,7 @@ global _write_cache
         ret
 
 ; -----------------------------------------------------
-; _read_cache:
+; read_cache:
 ;       Checks the cache for an address.
 ;       Returns the its buffer address in cache if present.
 ;
@@ -99,9 +99,9 @@ global _write_cache
 ;
 ;
 ; Destoys: 
-;       RAX, RBX, RCX, RDX, R8
+;       RAX, RBX, RCX, R8
 ; -----------------------------------------------------
-    _read_cache:
+    read_cache:
         ; register cleaning
         xor RAX
         xor RBX
@@ -159,38 +159,45 @@ global _write_cache
                 jmp _writting_loop
             
             _loop_end:
-                ; Moves the success exit code to rax
-                mov RAX, 0
+                ; Cell usage update routine
+                push rdi
+                push rsi
+                mov rdi, [cache_validity + rbx]
+                mov rsi, rax
+                call _update_cells
+                pop rsi
+                pop rdi
+                
+                ; Successful exit routine: moves the success exit code to rax
+                xor RAX
                 xor RBX
                 xor RCX
-                xor RDX
                 xor R8
                 ret
             
         _not_present: 
             ; error routine
             ; address is not in the cache
-            xor RDX
             xor RCX
             xor RBX
+            xor r8
             mov rax, 1
             ret
         
         _invalid_passkey:
-            xor RDX
             xor RCX
             xor RBX
+            xor r8
             mov rax, 2
             ret
 
 ; -----------------------------------------------------
-; _write_cache:
+; write_cache:
 ;       Writes a value in cache
 ;
 ; Inputs:
 ;       RDI: Address of the value to write in cache
-;       RSI: Number of bytes to write 
-;       RDX: Validation address (passkey)
+;       RSI: Validation address (passkey)
 ; Outputs:
 ;       RAX: Exit code: 
 ;               0 - success
@@ -201,20 +208,30 @@ global _write_cache
 ; Destoys: 
 ;       RAX, RBX, RCX, RDX
 ; -----------------------------------------------------
-    _write_cache:
+    write_cache:
         ; register cleaning
         xor RAX
         xor RBX
         xor RCX
         
         ; passkey validation
-        cmp rdx, validation_address
+        cmp rsi, validation_address
         jne _invalid_passkey
         
         ; valid passkey detected!
         
         
-
+        ; determine the oldest cell in cache
+        
+        
+        ; update cells time usage manager
+        
+        ; write to the cache
+        
+        
+        _invalid_passkey:
+            mov rax, 2
+            ret
 
 ; --------------------------
 ;   Multi purpose helpers
@@ -296,3 +313,20 @@ global _write_cache
         mov rsp, rbp
         pop rbp
         ret
+
+; -------------------------------------------------
+; _update_cells:
+;       Increments each cache validity cell value 
+;       besides the one to zero out.
+;
+; Inputs:
+;       RDI: Base Address of the 
+;            cell block validity buffer
+;       RSI: Cell to zero out
+; -------------------------------------------------
+    _update_cells:
+        push rax
+        xor rax
+        
+        cmp rax, CACHE_WAYS
+            
