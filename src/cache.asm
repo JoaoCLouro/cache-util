@@ -71,17 +71,14 @@ global _write_cache
 ; Outputs:
 ;       RAX: address to use to access the cache
 ; Destoys: 
-;       RAX, RBX
+;       RAX
 ; -----------------------------------------------------
     _init:
         ; gets a random value in the to randomize the address
         xor RAX
-        xor RBX
-        _get_rand_val
-        mov rax, rbx
+        call _get_rand_val
         add rax, validation_address
         mov [validation_address], rax
-        xor RBX
         ret
 
 ; -----------------------------------------------------
@@ -92,7 +89,8 @@ global _write_cache
 ; Inputs:
 ;       RDI: Address to read for
 ;       RSI: Address where to give the datas address in cache
-;       RDX: Validation address (passkey)
+;       RDX: Number of bytes to read
+;       RCX: Validation address (passkey)
 ; Outputs:
 ;       RAX: Exit code: 
 ;               0 - success
@@ -101,19 +99,19 @@ global _write_cache
 ;
 ;
 ; Destoys: 
-;       RAX, RBX, RCX, RDX
+;       RAX, RBX, RCX, RDX, R8
 ; -----------------------------------------------------
     _read_cache:
         ; register cleaning
         xor RAX
         xor RBX
-        xor RCX
         
         ; passkey validation
-        cmp rdx, validation_address
+        cmp rcx, validation_address
         jne _invalid_passkey
         
         ; valid passkey detected!
+        xor RCX
         
         ; gets the index bits of the address
         call _get_index_bits
@@ -130,12 +128,12 @@ global _write_cache
         _read:
             ; gets the tag bits of the address
             call _get_tag_bits
-            mov rdx, rax
+            mov r8, rax
             
             ; tries to match the tag bits to the ones in cache
             xor rax
             _loop:
-            cmp [cache_tags + rbx + rax], rdx
+            cmp [cache_tags + rbx + rax], r8
             ; if equal, rax holds the cache cell position with the correct data
             je _return_data
             cmp rax, CACHE_WAYS
@@ -146,16 +144,28 @@ global _write_cache
         _return_data:
             ; gets the offset bits of the address
             call _get_offset_bits
-            mov rdx, rax
+            mov r8, rax
             ; Moves the address of the value in cache to the return buffer address
-            mov rcx, [cache_buffer + rbx * CACHE_BLOCK_SIZE + rax * CACHE_CELL_SIZE + rdx]
-            mov [rsi], rcx
-            ; Moves the success exit code to rax
-            mov RAX, 0
-            xor RBX
-            xor RCX
-            xor RDX
-            ret
+            mov rcx, [cache_buffer + rbx * CACHE_BLOCK_SIZE + rax * CACHE_CELL_SIZE + r8]
+            
+            xor r8
+            _writting_loop:
+                ; writting on the return buffer the exact number of bytes from the cache
+                cmp r8, rdx
+                je _loop_end
+                ; If the number of bytes passed has not been reached yet continue writting
+                mov byte [rsi + r8], [rcx + r8]
+                inc r8
+                jmp _writting_loop
+            
+            _loop_end:
+                ; Moves the success exit code to rax
+                mov RAX, 0
+                xor RBX
+                xor RCX
+                xor RDX
+                xor R8
+                ret
             
         _not_present: 
             ; error routine
@@ -271,6 +281,7 @@ global _write_cache
 ; --------------------------------------------
     _get_rand_val:
         ; saves the stack state and reserves 8 bytes
+        xor rdx
         push rbp
         mov rbp, rsp
         sub rsp, 8
@@ -278,7 +289,6 @@ global _write_cache
         mov rax, 318        
         mov rdi, rsp        
         mov rsi, 8          
-        mov rdx, 0          
         syscall                
         ; sends that value to the return register
         mov rax, [rsp]
