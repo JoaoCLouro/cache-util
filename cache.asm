@@ -56,7 +56,7 @@ cache_tags:       resb (CACHE_TAG_BITS * CACHE_WAYS * CACHE_LINES)
 cache_buffer:     resb CACHE_SIZE
 
 section .text
-global _start
+global _init
 global _read_cache
 global _write_cache
 
@@ -73,7 +73,7 @@ global _write_cache
 ; Destoys: 
 ;       RAX, RBX
 ; -----------------------------------------------------
-    _start:
+    _init:
         ; gets a random value in the to randomize the address
         xor RAX
         xor RBX
@@ -83,20 +83,21 @@ global _write_cache
         mov [validation_address], rax
         xor RBX
         ret
-        
-    
 
 ; -----------------------------------------------------
 ; _read_cache:
-;       Checks the cache for an address 
+;       Checks the cache for an address.
+;       Returns the its buffer address in cache if present.
 ;
 ; Inputs:
 ;       RDI: Address to read for
-;       RSI: Address to write the data 
+;       RSI: Address where to give the datas address in cache
+;       RDX: Validation address (passkey)
 ; Outputs:
 ;       RAX: Exit code: 
 ;               0 - success
 ;               1 - address not in cache
+;               2 - not valid passkey
 ;
 ;
 ; Destoys: 
@@ -107,7 +108,12 @@ global _write_cache
         xor RAX
         xor RBX
         xor RCX
-        xor RDX
+        
+        ; passkey validation
+        cmp rdx, validation_address
+        jne _invalid_passkey
+        
+        ; valid passkey detected!
         
         ; gets the index bits of the address
         call _get_index_bits
@@ -159,11 +165,45 @@ global _write_cache
             xor RBX
             mov rax, 1
             ret
- 
+        
+        _invalid_passkey:
+            xor RDX
+            xor RCX
+            xor RBX
+            mov rax, 2
+            ret
 
-
-
-
+; -----------------------------------------------------
+; _write_cache:
+;       Writes a value in cache
+;
+; Inputs:
+;       RDI: Address of the value to write in cache
+;       RSI: Number of bytes to write 
+;       RDX: Validation address (passkey)
+; Outputs:
+;       RAX: Exit code: 
+;               0 - success
+;               1 - 
+;               2 - not valid passkey
+;
+;
+; Destoys: 
+;       RAX, RBX, RCX, RDX
+; -----------------------------------------------------
+    _write_cache:
+        ; register cleaning
+        xor RAX
+        xor RBX
+        xor RCX
+        
+        ; passkey validation
+        cmp rdx, validation_address
+        jne _invalid_passkey
+        
+        ; valid passkey detected!
+        
+        
 
 
 ; --------------------------
