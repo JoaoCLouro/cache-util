@@ -12,19 +12,19 @@ This is the main engine of this project. It is totally built in **assembly x86 6
 
 ```txt
 +-------------------------------------------------------------------+
-| Function Name |          Inputs           |         Outputs       |
+  Function Name |          Inputs           |         Outputs       
 ---------------------------------------------------------------------
-|    init       |           None            | Caches costume passkey|
+     init       |           None            | Caches costume passkey
 ---------------------------------------------------------------------
-|               | RDI: Target address       | RAX: Exit code        |
-|               | RSI: Return buffer         | 0- successful exit    |
-| read_cache    | RDX: Byte count to read   | 1- cache miss         |
-|               | RCX: Passkey              | 2- invalid passkey    |
-|               |                           | 3- cell miscalculation|
+                | RDI: Target address       | RAX: Exit code        
+                | RSI: Return buffer         | 0- successful exit   
+   read_cache   | RDX: Byte count to read   | 1- cache miss         
+                | RCX: Passkey              | 2- invalid passkey    
+                |                           | 3- cell miscalculation
 ---------------------------------------------------------------------
-|               | RDI: Address of value     | RAX: Exit code:       |
-|  write_cache  |       the data to write   |   0 - successful exit |
-|               | RSI: Passkey              |   2 - invalid passkey |
+                | RDI: Address of value     | RAX: Exit code:       
+   write_cache  |       the data to write   |   0 - successful exit 
+                | RSI: Passkey              |   2 - invalid passkey 
 +-------------------------------------------------------------------+
 ```
 
