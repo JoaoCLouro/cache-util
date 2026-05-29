@@ -56,10 +56,11 @@ The tree bits used for the choice tree follow the following pattern for decision
               /        \
        [  B1  ]        [  B0  ]       <-- Bottom nodes: Choose specific Cell
        /      \        /      \
-    Cell 0   Cell 1  Cell 2  Cell 3
+    Cell 1   Cell 2  Cell 3  Cell 4
 ```
 
-This tree follows a traditional binary tree pattern holding the least recently used cell number of the block.
+This tree follows a traditional binary tree pattern that compares two bits at the time for the least recently used. At any given node a 0 or a 1 is used to refer to the cell least recently used between them. Bit 0 of the tree compares between cell 4 and 3, bit 1 between 2 and 1, and bit 0 between the least recently used between the previous two.
+You specify the decision to take on any node attributing to that bit a '0' for left and a '1' for right.
 This allows for easier management of what cell to rewrite when needed. An empty CT (Choice tree) will direct always to the first cell on the block.
 
 (To Be Continued)

@@ -45,7 +45,12 @@
   CACHE_OFFSET_BITS EQU 6                           ; log 2 (CACHE_BLOCK_SIZE)
   CACHE_TAG_BITS    EQU (SYSTEM_ADDRESS_SIZE - (CACHE_INDEX_BITS + CACHE_OFFSET_BITS)) ;42
 ; --------------------------------------------
-  
+
+section.rodata
+; Error messages
+cell_miscalc_msg:    db "cell index was miscalculated", 10
+CM_MSG_LEN:          EQU $ - cell_miscalc_msg
+
 section .data
 validation_address: dq 0    ; Passkey to the cache
 
@@ -96,6 +101,7 @@ global write_cache
 ;               0 - success
 ;               1 - address not in cache
 ;               2 - not valid passkey
+;               3 - cell index miscalculation
 ;
 ;
 ; Destoys: 
@@ -120,9 +126,9 @@ global write_cache
         ; validates the existance of the data in cache
         mov cl, [cache_validity + rbx]
         and cl, 0x0f
-        cmp cl, 0
+        test cl
         ; not present
-        je _not_present
+        jz _not_present
         ; determine presence cell
         
         _read:
@@ -133,7 +139,7 @@ global write_cache
             ; tries to match the tag bits to the ones in cache
             xor rax
             _loop:
-            cmp [cache_tags + rbx + rax], r8
+            cmp [cache_tags + rbx * (CACHE_TAG_BITS + CACHE_WAYS) + rax * CACHE_TAG_BITS], r8
             ; if equal, rax holds the cache cell position with the correct data
             je _return_data
             
@@ -166,9 +172,11 @@ global write_cache
                 ; Cell usage update routine
                 push rdi
                 push rsi
-                mov rdi, [cache_validity + rbx]
+                mov rdi, [cache_validity + rbx * 8]
                 mov rsi, rax
                 call _update_cells
+                test rax
+                jnz _cell_index_error
                 pop rsi
                 pop rdi
                 
@@ -194,6 +202,19 @@ global write_cache
             xor r8
             mov rax, 2
             ret
+            
+        _cell_index_error:
+            ; writes the error msg to the std err
+            mov rax, 1
+            mov rdi, 2
+            lea rsi, [cell_miscalc_msg]
+            mov rdx, CM_MSG_LEN
+            syscall
+            
+            ; cell miscalculation exit code
+            mov rax, 3
+            ret
+            
 
 ; -----------------------------------------------------
 ; write_cache:
@@ -224,14 +245,34 @@ global write_cache
         
         ; valid passkey detected!
         
-        
         ; determine the oldest cell in cache
         
+        call _get_index_bits
+        mov rbx, rax                        ; RBX holds the index position
+        mov rcx, [cache_validity + rbx * 8] ; RCX holds the blocks validity address
         
+        push rcx
+        and rcx, 0x0f                   ; Ignores padding and decision tree bits for now
+        
+        cmp rcx, 0x0f
+        je _take_decision
+        
+        call _get_tag_bits              ; RAX holds the tag bits
+        
+        
+            
         ; update cells time usage manager
         
         ; write to the cache
         
+        
+        
+        
+        
+        _take_decision:
+            pop rcx     ; restores the full block info
+            
+            ; call the take decision function and overwrites the data
         
         _invalid_passkey:
             mov rax, 2
@@ -320,17 +361,89 @@ global write_cache
 
 ; -------------------------------------------------
 ; _update_cells:
-;       Increments each cache validity cell value 
-;       besides the one to zero out.
+;       Updates all validity / usage parameters
 ;
 ; Inputs:
 ;       RDI: Base Address of the 
 ;            cell block validity buffer
-;       RSI: Cell to zero out
+;       RSI: Latest accessed cell
+;
+; Outputs:
+;       RAX: Exit code: 
+;               0 - success
+;               1 - invalid cell number given
+;
+; Destroys:
+;       RAX
 ; -------------------------------------------------
     _update_cells:
-        push rax
-        xor rax
+        ; cell validation
+        cmp rsi, 0
+        jl _invalid_cell
+        cmp rsi, CACHE_WAYS
+        jg _invalid_cell
         
-        cmp rax, CACHE_WAYS
-            
+        ; cell is valid!
+        
+        xor rax
+        ; binary cell index to zero out convertion to index format
+        push rdi
+        mov rdi, rsi
+        call _bin_to_index
+        pop rdi
+        
+        ; activates the given cell usage
+        or rdi, rax
+        
+        ; advances the address to the decision tree
+        add rdi, 4
+        call _decision_logic
+    
+    _successfull_exit:
+        xor RAX
+        ret
+        
+        
+    _invalid_cell:
+        ; invalid cell exit code
+        mov RAX, 1
+        ret
+; -----------------------------------------------------------
+; _bin_to_index:
+;       Converts a binary number to an index representation.
+;       Ex: 0011 converts to 0100 and 0100 converts to 1000
+;
+; Inputs:
+;       RDI: binary number to convert
+;
+; Destroys:
+;       RAX, RDI
+; -------------------------------------------------
+    _bin_to_index:
+        xor rax
+        test rdi
+        jz _ret
+        mov rax, 1b
+        _loop:
+            dec rdi
+            test rdi
+            jz _ret
+            shl rax, 1
+            jmp _loop
+        _ret:
+            ret
+
+; -------------------------------------------------
+; _decision_logic:
+;       Updates the decision tree 
+;       based on the newlly accessed cell
+;
+; Inputs:
+;       RDI: Base Address of the decision tree 
+;       RSI: Latest accessed cell
+;
+; Destroys:
+;       RAX
+; -------------------------------------------------
+    _decision_logic:
+        ; (To implement)
