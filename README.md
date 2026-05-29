@@ -10,7 +10,7 @@ This is the main engine of this project. It is totally built in **assembly x86 6
 
 ##### API
 
-```txt
+```bash
 +-------------------------------------------------------------------+
 | Function Name |          Inputs           |         Outputs       |
 ---------------------------------------------------------------------
