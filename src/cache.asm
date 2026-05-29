@@ -119,7 +119,7 @@ global write_cache
         
         ; validates the existance of the data in cache
         mov cl, [cache_validity + rbx]
-        shr cl, CACHE_WAYS
+        and cl, 0x0f
         cmp cl, 0
         ; not present
         je _not_present
@@ -136,9 +136,13 @@ global write_cache
             cmp [cache_tags + rbx + rax], r8
             ; if equal, rax holds the cache cell position with the correct data
             je _return_data
+            
+            ; if not equal increment rax and validate it
+            inc rax
             cmp rax, CACHE_WAYS
             je _not_present
-            inc rax
+            
+            ; if still in valide range continue with the loop
             jmp _loop
             
         _return_data:
