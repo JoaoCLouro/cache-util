@@ -2,6 +2,31 @@
 
 ## Author: João Carrilho Louro
 
+### Modules 
+
+#### Cache module
+
+This is the main engine of this project. It is totally built in **assembly x86 64 bit, Intel syntax**. It follows **System V amd 64 ABI** function call convection to be as compatible as possible with other programs. This module defines all data buffers for the tag, validation and actual data, as well as all read, write and initialization functions that interact with them.
+
+##### API
+
+```txt
++-------------------------------------------------------------------+
+| Function Name |          Inputs           |         Outputs       |
+---------------------------------------------------------------------
+|    init       |           None            | Caches costume passkey|
+---------------------------------------------------------------------
+|               | RDI: Target address       | RAX: Exit code:       |
+|  read_cache   | RSI: Return buffer        | 0 - successfull exit  |
+|               | RDX: Byte count to read   | 1 - cache miss        |
+|               | RCX: Passkey              | 2 - invalid passkey   |
+---------------------------------------------------------------------
+|               | RDI: Address of value     | RAX: Exit code:       |
+|  write_cache  |       the data to write   |   0 - successfull exit|
+|               | RSI: Passkey              |   2 - invalid passkey |
++-------------------------------------------------------------------+
+```
+
 ### Design Choices
 
 #### Usage / Validation buffer
