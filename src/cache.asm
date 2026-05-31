@@ -402,8 +402,6 @@ global write_cache
         ; advances the address to the decision tree
         add rdi, 4
         call _decision_logic
-    
-    _successfull_exit:
         xor RAX
         ret
         
@@ -447,7 +445,7 @@ global write_cache
 ;       RSI: Latest accessed cell
 ;
 ; Destroys:
-;       RAX
+;       RAX (does not clean it)
 ; -------------------------------------------------
     _decision_logic:
         cmp rsi, 2
@@ -461,13 +459,11 @@ global write_cache
             cmp rsi,2
             je _2cell
             ; If was cell 1 just return
-            xor RAX
             ret
         
         _2cell:
             mov al, 00000010b
             or [rdi], al
-            xor RAX
             ret
        
         _3or4cell:
@@ -478,11 +474,9 @@ global write_cache
             cmp rsi,3
             je _3cell
             ; If was cell 4 just return
-            xor RAX
             ret
             
         _3cell:
             mov al, 11111110b
             and [rdi], al
-            xor RAX
             ret
