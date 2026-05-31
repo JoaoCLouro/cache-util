@@ -23,7 +23,7 @@
 ; ------------||-----------
 ;   In Use:
 ;
-;       16MB cache
+;       64KB cache
 ;----------------------------
 
 
@@ -35,13 +35,13 @@
   CACHE_WAYS EQU 4        ; Changing the number of cache cells per block requires major rework on read and write algorithms
     
 ; Changeable Values:
-  CACHE_SIZE EQU 16777216
-  CACHE_LINES       EQU (CACHE_SIZE / CACHE_BLOCK_SIZE)   ; 262144 lines
+  CACHE_SIZE EQU 65536
+  CACHE_LINES       EQU (CACHE_SIZE / CACHE_BLOCK_SIZE)   ; 1024 lines
   CACHE_CELL_SIZE   EQU (CACHE_BLOCK_SIZE / CACHE_WAYS)
   
-  CACHE_INDEX_BITS  EQU 16                           ; log 2 (CACHE_LINES / CACHE_WAYS)
+  CACHE_INDEX_BITS  EQU 8                           ; log 2 (CACHE_LINES / CACHE_WAYS)
   CACHE_OFFSET_BITS EQU 6                           ; log 2 (CACHE_BLOCK_SIZE)
-  CACHE_TAG_BITS    EQU (SYSTEM_ADDRESS_SIZE - (CACHE_INDEX_BITS + CACHE_OFFSET_BITS)) ;42
+  CACHE_TAG_BITS    EQU (SYSTEM_ADDRESS_SIZE - (CACHE_INDEX_BITS + CACHE_OFFSET_BITS)) ; 50
 ; --------------------------------------------
 
 section.rodata
@@ -108,37 +108,38 @@ global write_cache
 ;       RAX, RBX, RCX, R8
 ; -----------------------------------------------------
     read_cache:
-        ; register cleaning
+        ; Register cleaning
         xor RAX
         xor RBX
         
-        ; passkey validation
+        ; Passkey validation
         cmp rcx, validation_address
         jne _invalid_passkey
         
-        ; valid passkey detected!
+        ; Valid passkey detected!
         xor RCX
         
-        ; gets the index bits of the address
+        ; Gets the index bits of the address
         call _get_index_bits
         mov rbx, rax                    ; RBX holds the index bits
         
-        ; validates the existance of the data in cache
+        ; Validates the existance of the data in cache
         mov cl, [cache_validity + rbx]
         and cl, 0x0f
         test cl
-        ; not present
+        ; Not present
         jz _not_present
-        ; determine presence cell
         
         _read:
-            ; gets the tag bits of the address
+            ; Determine presence cell
+            
+            ; Gets the tag bits of the address
             call _get_tag_bits          ; r8 holds the tag bits
             mov r8, rax
             
-            
             push rdi
             push rsi
+            
             mov rdi, rbx        ; RDI holds the index bits
             mov rsi, r8         ; RSI holds the tag bits
             call _tag_exists_in_cache
@@ -147,9 +148,9 @@ global write_cache
             je _not_present
            
         _return_data:
-            ; preserve the cache cell number matched
+            ; Preserve the cache cell number matched
             push rax
-            ; gets the offset bits of the address
+            ; Gets the offset bits of the address
             call _get_offset_bits
             mov r8, rax
             pop rax
@@ -181,8 +182,8 @@ global write_cache
             ret
             
         _not_present: 
-            ; error routine
-            ; address is not in the cache
+            ; Error routine
+            ; Address is not in the cache
             xor RCX
             xor RBX
             xor r8
@@ -204,7 +205,7 @@ global write_cache
             mov rdx, CM_MSG_LEN
             syscall
             
-            ; cell miscalculation exit code
+            ; Cell miscalculation exit code
             mov rax, 3
             ret
             
@@ -227,42 +228,57 @@ global write_cache
 ;       RAX, RBX, RCX, RDX. RSI
 ; -----------------------------------------------------
     write_cache:
-        ; register cleaning
+        ; Register cleaning (might be deleted)
         xor RAX
         xor RBX
         xor RCX
         
-        ; passkey validation
+        ; Passkey validation
         cmp rsi, validation_address
         jne _invalid_passkey
         
-        ; valid passkey detected!
+        ; Valid passkey detected!
         
-        ; determine the oldest cell in cache
-        
-        call _get_index_bits
-        mov rbx, rax                        ; RBX holds the index position
-        mov rcx, [cache_validity + rbx * 8] ; RCX holds the blocks validity address
-        
-        ; verifiy if the address is in cache
-        
-        call _get_tag_bits
-        mov rsi, rax                        ; RSI holds the tag bits
-        push rdi
-        mov rdi, rbx                        ; RDI holds the index bits
-        call _tag_exists_in_cache           ; RAX holds the cell number or 0
-        cmp rax, 0
-        ; 0 - not in cache
-        je _decide_and_write
-        
-        ; data in cache
-        mov rdi, rcx                        ; RDI holds the block validity address
-        mov rsi, rax                        ; RSI holds the cache cell number 
-        call _update_cells
-        pop rdi
-        
+        _determine_address_existance_in_cache:
+            ; Determines if the address is already in cache
+            
+            call _get_index_bits
+            mov rbx, rax                        ; RBX holds the index position
+            
+            mov rcx, [cache_validity + rbx * 8] ; RCX holds the blocks validity address
+            
+            call _get_tag_bits
+            mov rsi, rax                        ; RSI holds the tag bits
+            
+            call _get_offset_bits
+            mov r8, rax                     ; R8 holds the offset bits
+            
+            ; Verifies if the tag is already written in the cache at the correct line
+            ; If so, the address was already written into the cache
+            
+            push rdi
+            mov rdi, rbx                        ; RDI holds the index bits
+            call _tag_exists_in_cache           ; RAX holds the cell number or 0
+            cmp rax, 0
+            ; 0 - not in cache
+            je _decide_and_write
+            
+        _write&update:
+            ; If enters, the address was already in the cache
+            
+            ; Rewrites data in cache (might be updated data)
+            mov rsi, [cache_buffer + rbx * CACHE_BLOCK_SIZE + rdi * CACHE_CELL_SIZE + r8]   
+            pop rdi
+            xchg rsi, rdi               ; RDI holds the write address && RSI holds the address to read from 
+            mov rdx, CACHE_BLOCK_SIZE   ; RDX holds the number of bytes to write
+            call _write_to_address
+            ; Updates the decision tree
+            mov rdi, rcx                                                                    ; RDI holds the block validity address
+            mov rsi, rax                                                                    ; RSI holds the cache cell number 
+            call _update_cells  
+                
         _exit:
-            ; exit routine
+            ; Exit routine
             xor RAX
             xor RBX
             xor RCX
@@ -275,8 +291,11 @@ global write_cache
             ret
         
         _decide_and_write:
-            ; To Implement
-
+            ; Determine if there is any empty cell
+            
+            ; If not decide what cell to rewrite and rewrite it
+            
+            ; Else write it
 
 ; --------------------------
 ;   Multi purpose helpers
