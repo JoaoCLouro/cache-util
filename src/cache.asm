@@ -93,7 +93,7 @@ global write_cache
 ;
 ; Inputs:
 ;       RDI: Address to read for
-;       RSI: Address where to give the datas address in cache
+;       RSI: Return buffer
 ;       RDX: Number of bytes to read
 ;       RCX: Validation address (passkey)
 ; Outputs:
@@ -121,7 +121,7 @@ global write_cache
         
         ; gets the index bits of the address
         call _get_index_bits
-        mov rbx, rax
+        mov rbx, rax                    ; RBX holds the index bits
         
         ; validates the existance of the data in cache
         mov cl, [cache_validity + rbx]
@@ -133,59 +133,52 @@ global write_cache
         
         _read:
             ; gets the tag bits of the address
-            call _get_tag_bits
+            call _get_tag_bits          ; r8 holds the tag bits
             mov r8, rax
             
-            ; tries to match the tag bits to the ones in cache
-            xor rax
-            _loop:
-            cmp [cache_tags + rbx * (CACHE_TAG_BITS + CACHE_WAYS) + rax * CACHE_TAG_BITS], r8
-            ; if equal, rax holds the cache cell position with the correct data
-            je _return_data
             
-            ; if not equal increment rax and validate it
-            inc rax
-            cmp rax, CACHE_WAYS
+            push rdi
+            push rsi
+            mov rdi, rbx        ; RDI holds the index bits
+            mov rsi, r8         ; RSI holds the tag bits
+            call _tag_exists_in_cache
+
+            cmp rax, 0
             je _not_present
-            
-            ; if still in valide range continue with the loop
-            jmp _loop
-            
+           
         _return_data:
+            ; preserve the cache cell number matched
+            push rax
             ; gets the offset bits of the address
             call _get_offset_bits
             mov r8, rax
+            pop rax
             ; Moves the address of the value in cache to the return buffer address
             mov rcx, [cache_buffer + rbx * CACHE_BLOCK_SIZE + rax * CACHE_CELL_SIZE + r8]
             
-            xor r8
-            _writting_loop:
-                ; writting on the return buffer the exact number of bytes from the cache
-                cmp r8, rdx
-                je _loop_end
-                ; If the number of bytes passed has not been reached yet continue writting
-                mov byte [rsi + r8], [rcx + r8]
-                inc r8
-                jmp _writting_loop
+            pop rdi           ; RDI holds the return address
+            mov rsi, rcx      ; RSI holds the read address
+            push rax
+            call _write_to_address
+            pop rax
             
-            _loop_end:
-                ; Cell usage update routine
-                push rdi
-                push rsi
-                mov rdi, [cache_validity + rbx * 8]
-                mov rsi, rax
-                call _update_cells
-                test rax
-                jnz _cell_index_error
-                pop rsi
-                pop rdi
+        _loop_end:
+            ; Updates cell decision tree      
+            push rdi    
+            mov rdi, [cache_validity + rbx * 8]     ; RDI holds the block's validity buffer address
+            mov rsi, rax                            ; RSI holds the latest accessed cell 
+            call _update_cells
+            test rax
+            jnz _cell_index_error
+            pop rsi
+            pop rdi
                 
-                ; Successful exit routine: moves the success exit code to rax
-                xor RAX
-                xor RBX
-                xor RCX
-                xor R8
-                ret
+            ; Successful exit routine: moves the success exit code to rax
+            xor RAX
+            xor RBX
+            xor RCX
+            xor R8
+            ret
             
         _not_present: 
             ; error routine
@@ -260,7 +253,7 @@ global write_cache
         call _tag_exists_in_cache           ; RAX holds the cell number or 0
         cmp rax, 0
         ; 0 - not in cache
-        je _write_in_cache
+        je _decide_and_write
         
         ; data in cache
         mov rdi, rcx                        ; RDI holds the block validity address
@@ -280,7 +273,9 @@ global write_cache
         _invalid_passkey:
             mov rax, 2
             ret
-
+        
+        _decide_and_write:
+            ; To Implement
 
 
 ; --------------------------
@@ -480,4 +475,66 @@ global write_cache
         _3cell:
             mov al, 11111110b
             and [rdi], al
+            ret
+
+; --------------------------------------------------
+; _tag_exists_in_cache:
+;       Verifies if the tag already exists
+;       in cache at the specific index line
+;
+; Inputs:
+;       RDI: Index bits to match
+;       RSI: Tag bits to match
+;
+; Outputs:
+;       RAX: Cell number match or 0 if not in cache
+; --------------------------------------------------
+    _tag_exists_in_cache:
+        ; tries to match the tag bits to the ones in cache
+            xor rax
+            _loop:
+                cmp [cache_tags + rdi * (CACHE_TAG_BITS + CACHE_WAYS) + rax * CACHE_TAG_BITS], rsi
+                ; if equal, rax holds the cache cell position with the correct data
+                je _tag_loop_end
+            
+                ; if not equal increment rax and validate it
+                inc rax
+                cmp rax, CACHE_WAYS
+                je _not_present
+            
+                ; if still in valide range continue with the loop
+                jmp _loop
+
+
+            _tag_loop_end:
+                inc RAX
+                ret            
+            
+            _not_present:
+                xor RAX
+                ret
+                
+; --------------------------------------------------
+; _write_to_address:
+;       Writes data in memory
+;
+; Inputs:
+;       RDI: Address where to write
+;       RSI: Address whero to read data from
+;       RDX: Number of bytes to write
+;
+; Outputs:
+;       RAX: Number of bytes written
+; --------------------------------------------------    
+    _write_to_address:
+        xor rax
+        _writting_loop:
+                ; writting on the return buffer the exact number of bytes 
+                cmp rax, rdx
+                je _loop_end
+                ; If the number of bytes passed has not been reached yet continue writting
+                mov byte [rdi + rax], [rsi + rax]
+                inc rax
+                jmp _writting_loop
+        _loop_end:
             ret
