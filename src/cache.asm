@@ -28,16 +28,14 @@
 
 
 ; --------------------------------------------
-; Cache details:
+; Unchangeable Cache details:
 ;
   SYSTEM_ADDRESS_SIZE EQU 64 
   CACHE_BLOCK_SIZE    EQU 64                           ; Bytes
-  
-; Changeable Values:
-
   CACHE_WAYS EQU 4        ; Changing the number of cache cells per block requires major rework on read and write algorithms
+    
+; Changeable Values:
   CACHE_SIZE EQU 16777216
-
   CACHE_LINES       EQU (CACHE_SIZE / CACHE_BLOCK_SIZE)   ; 262144 lines
   CACHE_CELL_SIZE   EQU (CACHE_BLOCK_SIZE / CACHE_WAYS)
   
@@ -57,7 +55,9 @@ validation_address: dq 0    ; Passkey to the cache
 section .bss
 align CACHE_BLOCK_SIZE
 cache_validity:   resb CACHE_LINES      ; 2 bits for each cache cell (1 byte total by block)
+align CACHE_BLOCK_SIZE
 cache_tags:       resb (CACHE_TAG_BITS * CACHE_WAYS * CACHE_LINES)
+align CACHE_BLOCK_SIZE
 cache_buffer:     resb CACHE_SIZE
 
 section .text
@@ -278,6 +278,10 @@ global write_cache
             mov rax, 2
             ret
 
+
+
+
+
 ; --------------------------
 ;   Multi purpose helpers
 ; --------------------------
@@ -446,4 +450,39 @@ global write_cache
 ;       RAX
 ; -------------------------------------------------
     _decision_logic:
-        ; (To implement)
+        cmp rsi, 2
+        ja _3or4cell
+      
+        _1or2cell:
+            ; standard cell 1 or 2 logic
+            mov al, 11111001b
+            and [rdi], al
+            ; Verifies the need for cell 2 logic            
+            cmp rsi,2
+            je _2cell
+            ; If was cell 1 just return
+            xor RAX
+            ret
+        
+        _2cell:
+            mov al, 00000010b
+            or [rdi], al
+            xor RAX
+            ret
+       
+        _3or4cell:
+            ; standard cell 3 or 4 logic
+            mov al, 00000101b
+            or [rdi], al
+            ; Verifies the need for cell 3 logic            
+            cmp rsi,3
+            je _3cell
+            ; If was cell 4 just return
+            xor RAX
+            ret
+            
+        _3cell:
+            mov al, 11111110b
+            and [rdi], al
+            xor RAX
+            ret
