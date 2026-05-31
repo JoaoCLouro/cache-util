@@ -231,7 +231,7 @@ global write_cache
 ;
 ;
 ; Destoys: 
-;       RAX, RBX, RCX, RDX
+;       RAX, RBX, RCX, RDX. RSI
 ; -----------------------------------------------------
     write_cache:
         ; register cleaning
@@ -251,34 +251,35 @@ global write_cache
         mov rbx, rax                        ; RBX holds the index position
         mov rcx, [cache_validity + rbx * 8] ; RCX holds the blocks validity address
         
-        push rcx
-        and rcx, 0x0f                   ; Ignores padding and decision tree bits for now
+        ; verifiy if the address is in cache
         
-        cmp rcx, 0x0f
-        je _take_decision
+        call _get_tag_bits
+        mov rsi, rax                        ; RSI holds the tag bits
+        push rdi
+        mov rdi, rbx                        ; RDI holds the index bits
+        call _tag_exists_in_cache           ; RAX holds the cell number or 0
+        cmp rax, 0
+        ; 0 - not in cache
+        je _write_in_cache
         
-        call _get_tag_bits              ; RAX holds the tag bits
+        ; data in cache
+        mov rdi, rcx                        ; RDI holds the block validity address
+        mov rsi, rax                        ; RSI holds the cache cell number 
+        call _update_cells
+        pop rdi
         
-        
-            
-        ; update cells time usage manager
-        
-        ; write to the cache
-        
-        
-        
-        
-        
-        _take_decision:
-            pop rcx     ; restores the full block info
-            
-            ; call the take decision function and overwrites the data
-        
+        _exit:
+            ; exit routine
+            xor RAX
+            xor RBX
+            xor RCX
+            xor RDX
+            xor RSI
+            ret
+
         _invalid_passkey:
             mov rax, 2
             ret
-
-
 
 
 
