@@ -56,9 +56,9 @@ validation_address: dq 0    ; Passkey to the cache
 
 section .bss
 align CACHE_BLOCK_SIZE
-cache_validity:   resb CACHE_LINES                                          ; 2 bits for each cache cell (1 byte total by block)
+cache_validity:   resb CACHE_LINES                          ; 2 bits for each cache cell (1 byte total by block)
 align CACHE_BLOCK_SIZE
-cache_tags:       resb (CACHE_TAG_BITS * CACHE_WAYS * CACHE_LINES / 8)      ; exact number of bits that cover all tags in the cache, 1 per cell 
+cache_tags:       resq (CACHE_WAYS * CACHE_LINES)           ; reserves 8 bytes for each tag (could be optimized) 
 align CACHE_BLOCK_SIZE
 cache_buffer:     resb CACHE_SIZE                                           
 
@@ -153,7 +153,18 @@ global write_cache
             mov r8, rax
             pop rax
             ; Moves the address of the value in cache to the return buffer address
-            mov rcx, [cache_buffer + rbx * CACHE_BLOCK_SIZE + rax * CACHE_CELL_SIZE + r8]
+            
+            ; Address simplification 
+            push rax
+            imul rax, CACHE_CELL_SIZE
+            add r8, rax
+            
+            mov rax, rbx
+            imul rax, CACHE_BLOCK_SIZE
+            add r8, rax
+            pop rax
+            ; Final address displacement is all in r8
+            mov rcx, [cache_buffer + r8]
             
             pop rdi           ; RDI holds the return address
             mov rsi, rcx      ; RSI holds the read address
@@ -227,8 +238,6 @@ global write_cache
     write_cache:
         ; Register cleaning (might be deleted)
         xor RAX
-        xor RBX
-        xor RCX
         
         ; Passkey validation
         cmp rsi, validation_address
@@ -264,7 +273,18 @@ global write_cache
             ; If enters, the address was already in the cache
             
             ; Rewrites data in cache (might be updated data)
-            mov rsi, [cache_buffer + rbx * CACHE_BLOCK_SIZE + rax * CACHE_CELL_SIZE]  
+            
+            ; Address simplification
+            push rax
+            imul rax, CACHE_CELL_SIZE
+            mov rdx, rax
+            
+            mov rax, rbx
+            imul rax, CACHE_BLOCK_SIZE
+            add rdx, rax            
+            pop rax
+            ; Final address displacement is all in rdx
+            mov rsi, [cache_buffer + rdx]  
             pop rdi 
             xchg rsi, rdi               ; RDI holds the write address && RSI holds the address to read from 
             mov rdx, CACHE_BLOCK_SIZE   ; RDX holds the number of bytes to write
@@ -292,12 +312,25 @@ global write_cache
             je _decide_cell_overwrite
             
             _write_cell:
-                ; Cleaning tag entry (might not be needed)
-                mov rdi, [cache_tags + rbx * (CACHE_TAG_BITS * CACHE_WAYS) + rax * CACHE_TAG_BITS]
+                ; Cleaning tag entry
+                
+                ; Address simplification
+                push rax
+                imul rax, 8
+                mov rdi, rax
+                
+                mov rax, rbx
+                imul rax, 8
+                imul rax, CACHE_WAYS
+                
+                add rax, rdi
+                ; Final address displacement is all in rax                
+                mov rdi, [cache_tags + rax]
                 and rdi, TAG_ENTRY_CLEANING_MASK
                 ; Writing new tag entry
                 or rdi, rsi
                 ; writing the data into the buffer and updating the validity buffer
+                pop rax
                 jmp _write_and_update
             
             _decide_cell_overwrite:
@@ -519,9 +552,18 @@ global write_cache
 ; --------------------------------------------------
     _tag_exists_in_cache:
         ; tries to match the tag bits to the ones in cache
-            xor rax
+            xor RAX
+            push RDI
+            
+            imul rdi, 8
+            imul rdi, CACHE_WAYS
+            add rdi, cache_tags
             _tag_detection_loop:
-                cmp [cache_tags + rdi * (CACHE_TAG_BITS + CACHE_WAYS) + rax * CACHE_TAG_BITS], rsi
+                ; Address simplification
+                
+                
+            
+                cmp qword [rdi + rax * 8], rsi
                 ; if equal, rax holds the cache cell position with the correct data
                 je _tag_loop_end
             
@@ -535,10 +577,12 @@ global write_cache
 
 
             _tag_loop_end:
+                pop RDI
                 inc RAX
                 ret            
             
             _tag_not_present:
+                pop RDI
                 xor RAX
                 ret
                 
