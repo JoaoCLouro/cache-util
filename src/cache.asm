@@ -33,7 +33,9 @@
   SYSTEM_ADDRESS_SIZE EQU 64 
   CACHE_BLOCK_SIZE    EQU 64                           ; Bytes
   CACHE_WAYS EQU 4        ; Changing the number of cache cells per block requires major rework on read and write algorithms
-    
+  ; Mask to use to clean a tag from its buffer (Needs update the tags bits const is changed)
+  TAG_ENTRY_CLEANING_MASK EQU 0xfffc000000000000
+  
 ; Changeable Values:
   CACHE_SIZE EQU 65536
   CACHE_LINES       EQU (CACHE_SIZE / CACHE_BLOCK_SIZE)   ; 1024 lines
@@ -44,7 +46,7 @@
   CACHE_TAG_BITS    EQU (SYSTEM_ADDRESS_SIZE - (CACHE_INDEX_BITS + CACHE_OFFSET_BITS)) ; 50
 ; --------------------------------------------
 
-section.rodata
+section .rodata
 ; Error messages
 cell_miscalc_msg:    db "cell index was miscalculated", 10
 CM_MSG_LEN:          EQU $ - cell_miscalc_msg
@@ -54,11 +56,11 @@ validation_address: dq 0    ; Passkey to the cache
 
 section .bss
 align CACHE_BLOCK_SIZE
-cache_validity:   resb CACHE_LINES      ; 2 bits for each cache cell (1 byte total by block)
+cache_validity:   resb CACHE_LINES                                          ; 2 bits for each cache cell (1 byte total by block)
 align CACHE_BLOCK_SIZE
-cache_tags:       resb (CACHE_TAG_BITS * CACHE_WAYS * CACHE_LINES)
+cache_tags:       resb (CACHE_TAG_BITS * CACHE_WAYS * CACHE_LINES / 8)      ; exact number of bits that cover all tags in the cache, 1 per cell 
 align CACHE_BLOCK_SIZE
-cache_buffer:     resb CACHE_SIZE
+cache_buffer:     resb CACHE_SIZE                                           
 
 section .text
 global init
@@ -82,6 +84,7 @@ global write_cache
         ; gets a random value in the to randomize the address
         xor RAX
         call _get_rand_val
+        shr rax, 1
         add rax, validation_address
         mov [validation_address], rax
         ret
@@ -220,7 +223,6 @@ global write_cache
 ; Outputs:
 ;       RAX: Exit code: 
 ;               0 - success
-;               1 - 
 ;               2 - not valid passkey
 ;
 ;
@@ -263,12 +265,12 @@ global write_cache
             ; 0 - not in cache
             je _decide_and_write
             
-        _write&update:
+        _write_and_update:
             ; If enters, the address was already in the cache
             
             ; Rewrites data in cache (might be updated data)
-            mov rsi, [cache_buffer + rbx * CACHE_BLOCK_SIZE + rdi * CACHE_CELL_SIZE + r8]   
-            pop rdi
+            mov rsi, [cache_buffer + rbx * CACHE_BLOCK_SIZE + rax * CACHE_CELL_SIZE]  
+            pop rdi 
             xchg rsi, rdi               ; RDI holds the write address && RSI holds the address to read from 
             mov rdx, CACHE_BLOCK_SIZE   ; RDX holds the number of bytes to write
             call _write_to_address
@@ -285,17 +287,29 @@ global write_cache
             xor RDX
             xor RSI
             ret
-
-        _invalid_passkey:
-            mov rax, 2
-            ret
         
         _decide_and_write:
             ; Determine if there is any empty cell
+            mov rdi, rcx    ; RDI holds the block validity address
+            call _any_cell_empty
             
+            cmp rax, 0  ; if equal all are full
+            je _decide_cell_overwrite
+            
+            _write_cell:
+                ; Cleaning tag entry (might not be needed)
+                mov rdi, [cache_tags + rbx * (CACHE_TAG_BITS * CACHE_WAYS) + rax * CACHE_TAG_BITS]
+                and rdi, TAG_ENTRY_CLEANING_MASK
+                ; Writing new tag entry
+                or rdi, rsi
+                ; writing the data into the buffer and updating the validity buffer
+                jmp _write_and_update
+            
+            _decide_cell_overwrite:
             ; If not decide what cell to rewrite and rewrite it
+            call _decide_cell   ; RAX holds the cell to update
+            jmp _write_cell
             
-            ; Else write it
 
 ; --------------------------
 ;   Multi purpose helpers
@@ -511,7 +525,7 @@ global write_cache
     _tag_exists_in_cache:
         ; tries to match the tag bits to the ones in cache
             xor rax
-            _loop:
+            _tag_detection_loop:
                 cmp [cache_tags + rdi * (CACHE_TAG_BITS + CACHE_WAYS) + rax * CACHE_TAG_BITS], rsi
                 ; if equal, rax holds the cache cell position with the correct data
                 je _tag_loop_end
@@ -519,17 +533,17 @@ global write_cache
                 ; if not equal increment rax and validate it
                 inc rax
                 cmp rax, CACHE_WAYS
-                je _not_present
+                je _tag_not_present
             
                 ; if still in valide range continue with the loop
-                jmp _loop
+                jmp _tag_detection_loop
 
 
             _tag_loop_end:
                 inc RAX
                 ret            
             
-            _not_present:
+            _tag_not_present:
                 xor RAX
                 ret
                 
@@ -547,13 +561,115 @@ global write_cache
 ; --------------------------------------------------    
     _write_to_address:
         xor rax
-        _writting_loop:
+        _writing_loop:
                 ; writting on the return buffer the exact number of bytes 
                 cmp rax, rdx
-                je _loop_end
+                je _writing_loop_end
                 ; If the number of bytes passed has not been reached yet continue writting
                 mov byte [rdi + rax], [rsi + rax]
                 inc rax
                 jmp _writting_loop
-        _loop_end:
+        _writing_loop_end:
+            ret
+
+; ------------------------------------------------------
+; _any_cell_empty:
+;       Verifies and returns the value of
+;       the first empty cell on a block or
+;       0 if none are empty
+;
+; Inputs:
+;       RDI: Address to the blocks validity buffer byte
+;
+; Outputs:
+;       RAX: Number of the first empty cell or 0
+; -------------------------------------------------------   
+    _any_cell_empty:
+        push RDI
+        push RSI
+        xor RSI ; Helper for bitwise comparison 
+        xor RAX ; Cell number identifier (0-3)
+        
+        _comparison_loop:
+            mov rsi, rdi
+            and rsi, 00000001b
+            
+            test rsi
+            jz _return_cell_number
+            
+            inc rax
+            cmp rax, CACHE_WAYS
+            je _ret_none
+            
+            shr rdi, 1
+            jmp _comparison_loop
+        
+        _return_cell_number:
+            inc RAX     ; (1-4) based result
+            pop RSI
+            pop RDI
+            ret
+        
+        _ret_none:
+            xor RAX
+            pop RSI
+            pop RDI
+            ret
+
+; ------------------------------------------------------
+; _decide_cell:
+;       Implement the decision logic and
+;       returns the cell number to rewrite.
+;       Specific to a 4 way cache
+;       (if the cache ways are ever changed needs
+;       new implementation)
+;
+; Inputs:
+;       RDI: Address to the blocks validity buffer byte
+;
+; Outputs:
+;       RAX: Number of the cell to rewrite
+; -------------------------------------------------------   
+    _decide_cell:
+        push RDI
+        push RSI
+        xor RSI
+        xor RAX
+        shr rdi, 4  ; RDI holds the decision tree base
+        
+        _top_node:
+            mov rsi, rdi
+            and rsi, 100b
+            test rsi
+            jz _1or2_cell
+            
+        _3or4_cell:
+            mov rsi, rdi
+            and rsi, 1b
+            test rsi
+            jz _3_cell
+            
+            _4_cell:
+                mov rax, 4
+                jmp _ret_cell
+            _3_cell:
+                mov rax, 3
+                jmp _ret_cell
+
+        _1or2_cell:
+            mov rsi, rdi
+            and rsi, 10b
+            test rsi
+            jz _1_cell
+            
+            _2_cell:
+                mov rax, 2
+                jmp _ret_cell
+            _1_cell:
+                mov rax, 1
+                jmp _ret_cell
+        
+        _ret_cell:
+            pop RSI
+            pop RDI
             ret
