@@ -36,11 +36,11 @@
   ; Mask to use to clean a tag from its buffer (Needs update the tags bits const is changed)
   TAG_ENTRY_CLEANING_MASK EQU 0xfffc000000000000
   
-; Changeable Values:
+; Changeable Value:
   CACHE_SIZE EQU 65536
+  
   CACHE_LINES       EQU (CACHE_SIZE / CACHE_BLOCK_SIZE)   ; 1024 lines
   CACHE_CELL_SIZE   EQU (CACHE_BLOCK_SIZE / CACHE_WAYS)
-  
   CACHE_INDEX_BITS  EQU 8                           ; log 2 (CACHE_LINES / CACHE_WAYS)
   CACHE_OFFSET_BITS EQU 6                           ; log 2 (CACHE_BLOCK_SIZE)
   CACHE_TAG_BITS    EQU (SYSTEM_ADDRESS_SIZE - (CACHE_INDEX_BITS + CACHE_OFFSET_BITS)) ; 50
@@ -66,11 +66,6 @@ section .text
 global init
 global read_cache
 global write_cache
-
-; To Implement
-;   WRITE CACHE
-
-
 
 ; -----------------------------------------------------
 ; init:

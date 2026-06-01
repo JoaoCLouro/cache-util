@@ -65,8 +65,6 @@ This tree follows a traditional binary tree pattern that compares two bits at th
 You specify the decision to take on any node attributing to that bit a '0' for left and a '1' for right.
 This allows for easier management of what cell to rewrite when needed. An empty CT (Choice tree) will direct always to the first cell on the block.
 
-(To Be Continued)
-
 ##### Presence Validation
 
 This function could either be done by the choice tree or the presence validation section. The decision is totally up to the developer. In the current state of the cache it is done by the presence validation section, where 4 bits (one for each cell) hold the state of each cell, using a '1' for filled and '0' for empty.
@@ -74,3 +72,16 @@ This function could either be done by the choice tree or the presence validation
 #### Data storage and validation
 
 Data storage is done using the cache_buffer declared in bss. It should be declared with the exact amount of bytes to be used. The identification of the address to read from the cache is done using the tags buffer as it is in a standard cache.
+
+
+#### Module Flexibility
+
+This particular module enables some changes to constant values (in the changeable section), mainly (and the most usefull) the cache size. The current default value for the cache size gives a large enought cache for most usecases but if you need a larger cache this also enables for multi-cache usage throught different objects (using the provided interfaces). If you require a single cache and therfore you want to increase its size, you just have to insert the number of bytes you want in the **CACHE_SIZE** constant definition. **You should always choose a value of a natural power of 2!!!**
+
+Besides cache size you can also change the number of **cache ways**, **despite being highly not recommended** because it would require major rework in some of the core logic and data structures.
+**Caches block size** byte number was selected to match most cpus internal to maximize performance, so it is also not recommended to be changed.
+
+
+---
+
+
