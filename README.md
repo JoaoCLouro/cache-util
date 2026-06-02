@@ -82,6 +82,12 @@ Besides cache size you can also change the number of **cache ways**, **despite b
 **Caches block size** byte number was selected to match most cpus internal to maximize performance, so it is also not recommended to be changed.
 
 
+#### Potential improvements
+
+* Tags:
+    - As of right now, the tags buffer is using 8 full bytes for each tag. Each tag only uses 50 bits per each address so there is a 16 bit waste per entry on the cache. It gets quite substential when you consider the size of the cache. This means there is a lot of space wasted.
+    For now, for simplicity reasons, it will stay this way. The tag detections and writing algorithms are considerably easier this way, but **sugestions and improvements are welcome**.
+
 ---
 
 
