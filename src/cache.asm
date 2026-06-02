@@ -1,3 +1,12 @@
+; Standard used
+default rel
+
+; -- | Funtions Provided | --
+global init
+global read_cache
+global write_cache
+; -- || ---------------------
+
 ; ---------------------------
 ;   Usefull cache sizes:
 ;   (Bytes)
@@ -63,9 +72,6 @@ align CACHE_BLOCK_SIZE
 cache_buffer:     resb CACHE_SIZE                                           
 
 section .text
-global init
-global read_cache
-global write_cache
 
 ; -----------------------------------------------------
 ; init:
@@ -77,7 +83,6 @@ global write_cache
 ; -----------------------------------------------------
     init:
         ; gets a random value in the to randomize the address
-        xor RAX
         call _get_rand_val
         shr rax, 1
         add rax, validation_address
@@ -105,18 +110,12 @@ global write_cache
 ; Destoys: 
 ;       RAX, RBX, RCX, R8
 ; -----------------------------------------------------
-    read_cache:
-        ; Register cleaning
-        xor RAX
-        xor RBX
-        
+    read_cache:        
         ; Passkey validation
         cmp rcx, validation_address
         jne _invalid_passkey
         
-        ; Valid passkey detected!
-        xor RCX
-        
+        ; Valid passkey detected!      
         ; Gets the index bits of the address
         call _get_index_bits
         mov rbx, rax                    ; RBX holds the index bits
@@ -124,9 +123,9 @@ global write_cache
         ; Validates the existance of the data in cache
         mov cl, [cache_validity + rbx]
         and cl, 0x0f
-        test cl
+        test cl, 0
         ; Not present
-        jz _not_present
+        je _not_present
         
         _read:
             ; Determine presence cell
@@ -178,31 +177,22 @@ global write_cache
             mov rdi, [cache_validity + rbx * 8]     ; RDI holds the block's validity buffer address
             mov rsi, rax                            ; RSI holds the latest accessed cell 
             call _update_cells
-            test rax
-            jnz _cell_index_error
+            test rax, 0
+            jne _cell_index_error
             pop rsi
             pop rdi
                 
             ; Successful exit routine: moves the success exit code to rax
-            xor RAX
-            xor RBX
-            xor RCX
-            xor R8
+            xor RAX, RAX
             ret
             
         _not_present: 
             ; Error routine
             ; Address is not in the cache
-            xor RCX
-            xor RBX
-            xor r8
             mov rax, 1
             ret
         
         _invalid_passkey:
-            xor RCX
-            xor RBX
-            xor r8
             mov rax, 2
             ret
             
@@ -235,10 +225,7 @@ global write_cache
 ; Destoys: 
 ;       RAX, RBX, RCX, RDX. RSI
 ; -----------------------------------------------------
-    write_cache:
-        ; Register cleaning (might be deleted)
-        xor RAX
-        
+    write_cache:     
         ; Passkey validation
         cmp rsi, validation_address
         jne _invalid_passkey
@@ -296,11 +283,7 @@ global write_cache
                 
         _exit:
             ; Exit routine
-            xor RAX
-            xor RBX
-            xor RCX
-            xor RDX
-            xor RSI
+            xor RAX, RAX
             ret
         
         _decide_and_write:
@@ -326,7 +309,8 @@ global write_cache
                 add rax, rdi
                 ; Final address displacement is all in rax                
                 mov rdi, [cache_tags + rax]
-                and rdi, TAG_ENTRY_CLEANING_MASK
+                mov rax, TAG_ENTRY_CLEANING_MASK
+                and rdi, rax
                 ; Writing new tag entry
                 or rdi, rsi
                 ; writing the data into the buffer and updating the validity buffer
@@ -404,7 +388,7 @@ global write_cache
 ; --------------------------------------------
     _get_rand_val:
         ; saves the stack state and reserves 8 bytes
-        xor rdx
+        xor rdx, rdx
         push rbp
         mov rbp, rsp
         sub rsp, 8
@@ -446,7 +430,7 @@ global write_cache
         
         ; cell is valid!
         
-        xor rax
+        xor rax, rax
         ; binary cell index to zero out convertion to index format
         push rdi
         mov rdi, rsi
@@ -459,7 +443,7 @@ global write_cache
         ; advances the address to the decision tree
         add rdi, 4
         call _decision_logic
-        xor RAX
+        xor RAX, RAX
         ret
         
         
@@ -479,14 +463,14 @@ global write_cache
 ;       RAX, RDI
 ; -------------------------------------------------
     _bin_to_index:
-        xor rax
-        test rdi
-        jz _ret
+        xor rax, rax
+        cmp rdi, 0
+        je _ret
         mov rax, 1b
         _loop:
             dec rdi
-            test rdi
-            jz _ret
+            cmp rdi, 0
+            je _ret
             shl rax, 1
             jmp _loop
         _ret:
@@ -506,34 +490,34 @@ global write_cache
 ; -------------------------------------------------
     _decision_logic:
         cmp rsi, 2
-        ja _3or4cell
+        ja _update_3or4cell
       
-        _1or2cell:
+        _update_1or2_cell:
             ; standard cell 1 or 2 logic
             mov al, 11111001b
             and [rdi], al
             ; Verifies the need for cell 2 logic            
             cmp rsi,2
-            je _2cell
+            je _update_2cell
             ; If was cell 1 just return
             ret
         
-        _2cell:
+        _update_2cell:
             mov al, 00000010b
             or [rdi], al
             ret
        
-        _3or4cell:
+        _update_3or4cell:
             ; standard cell 3 or 4 logic
             mov al, 00000101b
             or [rdi], al
             ; Verifies the need for cell 3 logic            
             cmp rsi,3
-            je _3cell
+            je _update_3cell
             ; If was cell 4 just return
             ret
             
-        _3cell:
+        _update_3cell:
             mov al, 11111110b
             and [rdi], al
             ret
@@ -552,17 +536,14 @@ global write_cache
 ; --------------------------------------------------
     _tag_exists_in_cache:
         ; tries to match the tag bits to the ones in cache
-            xor RAX
-            push RDI
-            
+            xor rax, rax
+            push rdi
+            ; Address simplification
             imul rdi, 8
             imul rdi, CACHE_WAYS
             add rdi, cache_tags
             _tag_detection_loop:
-                ; Address simplification
                 
-                
-            
                 cmp qword [rdi + rax * 8], rsi
                 ; if equal, rax holds the cache cell position with the correct data
                 je _tag_loop_end
@@ -575,7 +556,6 @@ global write_cache
                 ; if still in valide range continue with the loop
                 jmp _tag_detection_loop
 
-
             _tag_loop_end:
                 pop RDI
                 inc RAX
@@ -583,7 +563,7 @@ global write_cache
             
             _tag_not_present:
                 pop RDI
-                xor RAX
+                xor RAX, RAX
                 ret
                 
 ; --------------------------------------------------
@@ -599,15 +579,17 @@ global write_cache
 ;       RAX: Number of bytes written
 ; --------------------------------------------------    
     _write_to_address:
-        xor rax
+        push rcx
+        xor rax, rax
         _writing_loop:
                 ; writting on the return buffer the exact number of bytes 
                 cmp rax, rdx
                 je _writing_loop_end
                 ; If the number of bytes passed has not been reached yet continue writting
-                mov byte [rdi + rax], [rsi + rax]
+                mov cl, [rsi + rax]
+                mov byte [rdi + rax], cl
                 inc rax
-                jmp _writting_loop
+                jmp _writing_loop
         _writing_loop_end:
             ret
 
@@ -626,15 +608,15 @@ global write_cache
     _any_cell_empty:
         push RDI
         push RSI
-        xor RSI ; Helper for bitwise comparison 
-        xor RAX ; Cell number identifier (0-3)
+        xor RSI, RSI ; Helper for bitwise comparison 
+        xor RAX, RAX ; Cell number identifier (0-3)
         
         _comparison_loop:
             mov rsi, rdi
             and rsi, 00000001b
             
-            test rsi
-            jz _return_cell_number
+            cmp rsi, 0
+            je _return_cell_number
             
             inc rax
             cmp rax, CACHE_WAYS
@@ -650,7 +632,7 @@ global write_cache
             ret
         
         _ret_none:
-            xor RAX
+            xor RAX, RAX
             pop RSI
             pop RDI
             ret
@@ -672,21 +654,19 @@ global write_cache
     _decide_cell:
         push RDI
         push RSI
-        xor RSI
-        xor RAX
         shr rdi, 4  ; RDI holds the decision tree base
         
         _top_node:
             mov rsi, rdi
             and rsi, 100b
-            test rsi
-            jz _1or2_cell
+            cmp rsi, 0
+            je _1or2_cell
             
         _3or4_cell:
             mov rsi, rdi
             and rsi, 1b
-            test rsi
-            jz _3_cell
+            cmp rsi, 0
+            je _3_cell
             
             _4_cell:
                 mov rax, 4
@@ -698,8 +678,8 @@ global write_cache
         _1or2_cell:
             mov rsi, rdi
             and rsi, 10b
-            test rsi
-            jz _1_cell
+            cmp rsi, 0
+            je _1_cell
             
             _2_cell:
                 mov rax, 2
