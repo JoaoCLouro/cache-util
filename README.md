@@ -29,7 +29,7 @@ This is the main engine of this project. It is totally built in **assembly x86 6
 ```
 
 ### Design Choices
----
+
 #### **Usage/Validation buffer**
 The cache usage buffer is divided into 3 section, per each block of the cache:
 
