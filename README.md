@@ -2,9 +2,11 @@
 
 ## Author: João Carrilho Louro
 
-### Modules
+---
 
-#### Cache module
+### **Modules**
+
+#### -> **Cache module**
 
 This is the main engine of this project. It is totally built in **assembly x86 64 bit, Intel syntax**. It follows **System V amd 64 ABI** function call convection to be as compatible as possible with other programs. This module defines all data buffers for the tag, validation and actual data, as well as all read, write and initialization functions that interact with them.
 
@@ -30,7 +32,8 @@ This is the main engine of this project. It is totally built in **assembly x86 6
 
 ### Design Choices
 
-#### **Usage/Validation buffer**
+#### -> **Usage/Validation buffer**
+
 The cache usage buffer is divided into 3 section, per each block of the cache:
 
 ```txt
@@ -47,8 +50,8 @@ Each byte on the buffer refers to a block of the cache. Each byte is then devisa
 - A **padding section** with an unused bit
 - A **LRU choice tree** section
 - A **presence validation** section for each cell
-
-#### **LRU (Least Recently Used) Choice Tree**
+  
+#### -> **LRU (Least Recently Used) Choice Tree**
 
 The tree bits used for the choice tree follow the following pattern for decision-making:
 
@@ -64,29 +67,40 @@ This tree follows a traditional binary tree pattern that compares two bits at th
 You specify the decision to take on any node attributing to that bit a '0' for left and a '1' for right.
 This allows for easier management of what cell to rewrite when needed. An empty CT (Choice tree) will direct always to the first cell on the block.
 
-#### **Presence Validation**
+#### -> **Presence Validation**
 
 This function could either be done by the choice tree or the presence validation section. The decision is totally up to the developer. In the current state of the cache it is done by the presence validation section, where 4 bits (one for each cell) hold the state of each cell, using a '1' for filled and '0' for empty.
 
-#### **Data storage and validation**
+#### -> **Data storage and validation**
 
 Data storage is done using the cache_buffer declared in bss. It should be declared with the exact amount of bytes to be used. The identification of the address to read from the cache is done using the tags buffer as it is in a standard cache.
 
+#### -> **Module Flexibility**
 
-#### **Module Flexibility**
-
-This particular module enables some changes to constant values (in the changeable section), mainly (and the most usefull) the cache size. The current default value for the cache size gives a large enought cache for most usecases but if you need a larger cache this also enables for multi-cache usage throught different objects (using the provided interfaces). If you require a single cache and therfore you want to increase its size, you just have to insert the number of bytes you want in the **CACHE_SIZE** constant definition. **You should always choose a value of a natural power of 2!!!**
+This particular module enables some changes to constant values (in the changeable section), mainly (and the most useful) the cache size. The current default value for the cache size gives a large enough cache for most use cases but if you need a larger cache this also enables for multi-cache usage through different objects (using the provided interfaces). If you require a single cache and therefore you want to increase its size, you just have to insert the number of bytes you want in the **CACHE_SIZE** constant definition. **You should always choose a value of a natural power of 2!!!**
 
 Besides cache size you can also change the number of **cache ways**, **despite being highly not recommended** because it would require major rework in some of the core logic and data structures.
-**Caches block size** byte number was selected to match most cpus internal to maximize performance, so it is also not recommended to be changed.
+**Caches block size** byte number was selected to match most CPUs internal to maximize performance, so it is also not recommended to be changed.
 
+#### -> **Potential improvements**
 
-#### **Potential improvements**
-
-* Tags:
-    - As of right now, the tags buffer is using 8 full bytes for each tag. Each tag only uses 50 bits per each address so there is a 16 bit waste per entry on the cache. It gets quite substential when you consider the size of the cache. This means there is a lot of space wasted.
-    For now, for simplicity reasons, it will stay this way. The tag detections and writing algorithms are considerably easier this way, but **sugestions and improvements are welcome**.
+- Tags:  
+    As of right now, the tags buffer is using 8 full bytes for each tag. Each tag only uses 50 bits per each address so there is a 16 bit waste per entry on the cache. It gets quite substantial when you consider the size of the cache. This means there is a lot of space wasted.
+    For now, for simplicity reasons, it will stay this way. The tag detections and writing algorithms are considerably easier this way, but **suggestions and improvements are welcome**.
 
 ---
 
+### **Interfaces**
 
+There are currently two interfaces in construction:
+
+- A **C** procedural interface oriented to low level performance code with integration with other technologies and languages;
+- A **C++** object oriented interface for low level systems / high performance c++ code;
+
+#### -> **C Interface**
+
+  (To Be Continued)
+
+#### -> **C++ Interface**
+
+  (To Be Continued)
