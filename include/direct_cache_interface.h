@@ -14,6 +14,7 @@
 // ============================================================================
 
 #include <stdint.h>
+#include <stddef.h>
 
 // ============================================================================
 // Cache Configuration Constants
@@ -35,7 +36,7 @@
  * @brief Initializes the cache environment and sets up a randomized passkey.
  * * @return uint64_t The validation address (passkey) required for read/write.
  */
-uint64_t init(void);
+uint64_t init_t (void);
 
 /**
  * @brief Checks the cache for an address and reads its contents if present.
@@ -49,10 +50,10 @@ uint64_t init(void);
  * 2 - Invalid passkey
  * 3 - Cell index miscalculation error
  */
-uint64_t read_cache(uint64_t address, 
-                    void *return_buffer, 
-                    uint64_t bytes_to_read, 
-                    uint64_t passkey);
+uint64_t read_cache_t (uint64_t address, 
+                       void *return_buffer, 
+                       size_t bytes_to_read, 
+                       uint64_t passkey);
 
 /**
  * @brief Writes a block of memory into the cache allocation workspace.
@@ -62,7 +63,7 @@ uint64_t read_cache(uint64_t address,
  * 0 - Success
  * 2 - Invalid passkey
  */
-uint64_t write_cache(uint64_t address_to_write, 
-                     uint64_t passkey);
+uint64_t write_cache_t (uint64_t address_to_write, 
+                        uint64_t passkey);
 
 # endif // DIRECTCACHELIB_H
