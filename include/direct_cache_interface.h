@@ -34,13 +34,13 @@
 
 /**
  * @brief Initializes the cache environment and sets up a randomized passkey.
- * * @return uint64_t The validation address (passkey) required for read/write.
+ * @return uint64_t The validation address (passkey) required for read/write.
  */
 uint64_t init_t (void);
 
 /**
  * @brief Checks the cache for an address and reads its contents if present.
- * * @param address       The 64-bit target address to query inside the cache (RDI).
+ * @param address       The 64-bit target address to query inside the cache (RDI).
  * @param return_buffer Pointer to the C destination buffer where data will be copied (RSI).
  * @param bytes_to_read The number of bytes to read out of the cache cell (RDX).
  * @param passkey       The key returned by init() to authorize cache access (RCX).
@@ -57,7 +57,7 @@ uint64_t read_cache_t (uint64_t address,
 
 /**
  * @brief Writes a block of memory into the cache allocation workspace.
- * * @param address_to_write The 64-bit address context for the data entry (RDI).
+ * @param address_to_write The 64-bit address context for the data entry (RDI).
  * @param passkey          The key returned by init() to authorize cache access (RSI).
  * * @return uint64_t Exit status code (RAX):
  * 0 - Success
