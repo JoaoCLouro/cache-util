@@ -13,8 +13,6 @@ struct Definition {
     cache_accesses_buffer* accesses_buffer;
 };
 
-
-
 /**
  * @brief Private buffer holding the pending accesses to be executed on the next flush call.
  * * This buffer is used to store the pending accesses to be executed on the next flush call.
@@ -40,7 +38,7 @@ typedef struct cache_accesses_buffer {
 // Init, Getters and Setters Functions
 // ============================================================================
 
-Definition* init_cache (uint64_t passkey)
+Definition* init_t (const uint64_t passkey)
 {
     Definition* def = malloc(sizeof(Definition));
     def->thread_count = 1;
@@ -50,9 +48,10 @@ Definition* init_cache (uint64_t passkey)
     return def;
 }
 
-uint8_t set_thread_count (Definition* def, uint8_t thread_count)
+uint8_t set_thread_count (Definition* def, const uint8_t thread_count)
 {
-    if (def == NULL) {
+    if (def == NULL)
+    {
         return 0;
     }
     else if (thread_count == 0 || thread_count > 64) {
@@ -62,17 +61,19 @@ uint8_t set_thread_count (Definition* def, uint8_t thread_count)
     return 1;
 }
 
-uint8_t get_thread_count (Definition* def)
+uint8_t get_thread_count (const Definition* def)
 {
-    if (def == NULL) {
+    if (def == NULL)
+    {
         return 0;
     }
     return def->thread_count;
 }
 
-uint8_t set_max_wait_size (Definition* def, uint8_t size)
+uint8_t set_max_wait_size (Definition* def, const uint8_t size)
 {
-    if (def == NULL) {
+    if (def == NULL)
+    {
         return 0;
     }
     else if (size == 0 || size > 128) {
@@ -82,9 +83,10 @@ uint8_t set_max_wait_size (Definition* def, uint8_t size)
     return 1;
 }
 
-uint8_t get_max_wait_size (Definition* def)
+uint8_t get_max_wait_size (const Definition* def)
 {
-    if (def == NULL) {
+    if (def == NULL)
+    {
         return 0;
     }
     return def->max_buffer_size;
@@ -96,7 +98,8 @@ uint8_t get_max_wait_size (Definition* def)
 
 void clean (Definition* def)
 {
-    if (def == NULL) {
+    if (def == NULL)
+    {
         return;
     }
     // Free all the pending accesses buffers and allocate new ones
@@ -109,3 +112,36 @@ void clean (Definition* def)
     def->accesses_buffer = malloc(sizeof(cache_accesses_buffer));
 }
 
+void flush (Definition* def)
+{
+    if (def == NULL)
+    {
+        return;
+    }
+    ...
+}
+
+void multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
+{
+    if (def == NULL) 
+    {
+        return;
+    }
+    ...
+}
+
+void multi_write_cache_t(Definition* def, const void** write_buffers)
+{
+    if (def == NULL) 
+    {
+        return;
+    }
+    ...
+}
+
+uint8_t multi_operation_compatible_t(const uint64_t address_1, const uint64_t address_2)
+{
+    uint64_t ad1 = (address_1 << CACHE_TAG_BITS) >> CACHE_TAG_BITS >> CACHE_OFFSET_BITS;
+    uint64_t ad2 = (address_2 << CACHE_TAG_BITS) >> CACHE_TAG_BITS >> CACHE_OFFSET_BITS;
+    return (ad1 != ad2) ? 1 : 0;
+}

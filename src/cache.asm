@@ -1,14 +1,14 @@
 ; Standard used
 default rel
 
-; -- | Funtions Provided | --
+; -- | Functions Provided | --
 global init
 global read_cache
 global write_cache
 ; -- || ---------------------
 
 ; ---------------------------
-;   Usefull cache sizes:
+;   Useful cache sizes:
 ;   (Bytes)
 ;
 ; 265 MB cache:
@@ -78,7 +78,7 @@ section .text
 ;       Returns a validation address to the cache
 ; Outputs:
 ;       RAX: address to use to access the cache
-; Destoys: 
+; Destroys: 
 ;       RAX
 ; -----------------------------------------------------
     init:
@@ -107,7 +107,7 @@ section .text
 ;               3 - cell index miscalculation
 ;
 ;
-; Destoys: 
+; Destroys: 
 ;       RAX, RBX, RCX, R8
 ; -----------------------------------------------------
     read_cache:        
@@ -120,7 +120,7 @@ section .text
         call _get_index_bits
         mov rbx, rax                    ; RBX holds the index bits
         
-        ; Validates the existance of the data in cache
+        ; Validates the existence of the data in cache
         mov cl, [cache_validity + rbx]
         and cl, 0x0f
         test cl, 0
@@ -222,7 +222,7 @@ section .text
 ;               2 - not valid passkey
 ;
 ;
-; Destoys: 
+; Destroys: 
 ;       RAX, RBX, RCX, RDX. RSI
 ; -----------------------------------------------------
     write_cache:     
@@ -232,7 +232,7 @@ section .text
         
         ; Valid passkey detected!
         
-        _determine_address_existance_in_cache:
+        _determine_address_existence_in_cache:
             ; Determines if the address is already in cache
             
             call _get_index_bits
@@ -431,7 +431,7 @@ section .text
         ; cell is valid!
         
         xor rax, rax
-        ; binary cell index to zero out convertion to index format
+        ; binary cell index to zero out conversion to index format
         push rdi
         mov rdi, rsi
         call _bin_to_index
@@ -479,7 +479,7 @@ section .text
 ; -------------------------------------------------
 ; _decision_logic:
 ;       Updates the decision tree 
-;       based on the newlly accessed cell
+;       based on the newly accessed cell
 ;
 ; Inputs:
 ;       RDI: Base Address of the decision tree 
@@ -553,7 +553,7 @@ section .text
                 cmp rax, CACHE_WAYS
                 je _tag_not_present
             
-                ; if still in valide range continue with the loop
+                ; if still in valid range continue with the loop
                 jmp _tag_detection_loop
 
             _tag_loop_end:
@@ -572,7 +572,7 @@ section .text
 ;
 ; Inputs:
 ;       RDI: Address where to write
-;       RSI: Address whero to read data from
+;       RSI: Address where to read data from
 ;       RDX: Number of bytes to write
 ;
 ; Outputs:
@@ -582,7 +582,7 @@ section .text
         push rcx
         xor rax, rax
         _writing_loop:
-                ; writting on the return buffer the exact number of bytes 
+                ; writing on the return buffer the exact number of bytes 
                 cmp rax, rdx
                 je _writing_loop_end
                 ; If the number of bytes passed has not been reached yet continue writting

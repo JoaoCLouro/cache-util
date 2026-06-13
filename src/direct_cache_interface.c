@@ -18,12 +18,12 @@ uint64_t init_t (void)
     return init();
 }
 
-uint64_t read_cache_t (uint64_t address, void* return_buffer, uint64_t bytes_to_read, uint64_t passkey)
+uint64_t read_cache_t (const uint64_t address, const void *return_buffer, const size_t bytes_to_read, const uint64_t passkey)
 {
-    return read_cache(address, return_buffer, (size_t) bytes_to_read, passkey);
+    return read_cache(address, (void *) return_buffer, (size_t) bytes_to_read, passkey);
 }
 
-uint64_t write_cache_t (uint64_t address_to_write, uint64_t passkey)
+uint64_t write_cache_t (const uint64_t address_to_write, const uint64_t passkey)
 {
     return write_cache(address_to_write, passkey);
 }

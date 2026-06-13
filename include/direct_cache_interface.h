@@ -28,6 +28,10 @@
 #define CACHE_LINES         (CACHE_SIZE / CACHE_BLOCK_SIZE)   // 1024 lines
 #define CACHE_CELL_SIZE     (CACHE_BLOCK_SIZE / CACHE_WAYS)   // 16 bytes
 
+#define CACHE_TAG_BITS      50                                // SYSTEM_ADDRESS_SIZE - CACHE_INDEX_BITS - CACHE_OFFSET_BITS
+#define CACHE_INDEX_BITS    8                                 // log2(CACHE_LINES)
+#define CACHE_OFFSET_BITS   6                                 // log2(CACHE_BLOCK_SIZE)
+
 // ============================================================================
 // Provided Functions
 // ============================================================================
@@ -50,10 +54,10 @@ uint64_t init_t (void);
  * 2 - Invalid passkey
  * 3 - Cell index miscalculation error
  */
-uint64_t read_cache_t (uint64_t address, 
-                       void *return_buffer, 
-                       size_t bytes_to_read, 
-                       uint64_t passkey);
+uint64_t read_cache_t (const uint64_t address, 
+                       const void *return_buffer, 
+                       const size_t bytes_to_read, 
+                       const uint64_t passkey);
 
 /**
  * @brief Writes a block of memory into the cache allocation workspace.
@@ -63,7 +67,7 @@ uint64_t read_cache_t (uint64_t address,
  * 0 - Success
  * 2 - Invalid passkey
  */
-uint64_t write_cache_t (uint64_t address_to_write, 
-                        uint64_t passkey);
+uint64_t write_cache_t (const uint64_t address_to_write, 
+                        const uint64_t passkey);
 
 # endif // DIRECTCACHELIB_H
