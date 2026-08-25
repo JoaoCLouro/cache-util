@@ -1,17 +1,10 @@
 #include "../include/cache.h"
 #include <stdint.h>
-
+#include <stdlib.h>
 
 // ============================================================================
 // Internal Structs and Types Definitions
 // ============================================================================
-
-struct Definition {
-    uint8_t thread_count;
-    uint8_t max_buffer_size;
-    uint64_t passkey;
-    cache_accesses_buffer* accesses_buffer;
-};
 
 /**
  * @brief Private buffer holding the pending accesses to be executed on the next flush call.
@@ -33,6 +26,13 @@ typedef struct cache_accesses_buffer {
     uint8_t return_buffers_count;
 } cache_accesses_buffer;
 
+
+struct Definition {
+    uint8_t thread_count;
+    uint8_t max_buffer_size;
+    uint64_t passkey;
+    cache_accesses_buffer* accesses_buffer;
+};
 
 // ============================================================================
 // Init, Getters and Setters Functions

@@ -17,6 +17,15 @@
 #include "../src/direct_cache_interface.c"
 
 // ============================================================================
+//  Structures Prototypes
+// ============================================================================
+
+/**
+ * @brief Structure containing module constraints such as number of threads available and active and the accesses buffer
+ */
+typedef struct Definition Definition;
+
+// ============================================================================
 // Core Functions Interface
 // ============================================================================
 
