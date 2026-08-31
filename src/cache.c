@@ -34,11 +34,23 @@ struct Definition {
     cache_accesses_buffer* accesses_buffer;
 };
 
+enum operations {
+    WRITE,
+    READ
+};
+
+// Prototypes
+static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count);
+static void flush_write(Definition *def);
+static uint8_t address_compatibility_check(const uint64_t address, const uint64_t *base_buffer, int base_buffer_count);
+
+
+
 // ============================================================================
 // Init, Getters and Setters Functions
 // ============================================================================
 
-Definition* init_t (const uint64_t passkey)
+Definition* m_init_t (const uint64_t passkey)
 {
     Definition* def = malloc(sizeof(Definition));
     def->thread_count = 1;
@@ -130,18 +142,73 @@ void multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const u
     ...
 }
 
-void multi_write_cache_t(Definition* def, const void** write_buffers)
+void multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count)
 {
     if (def == NULL) 
     {
         return;
     }
-    ...
+    
+    // Calculates and writes to the buffer the possible compatible addresses
+    uint8_t written = fill_write_buffer(def, write_buffers, write_count);
+
+    // If at least one was incompoatible flush the buffer and start over
+    if (written != write_count)
+    {
+        // Triggers execution
+        flush_write(def);
+        multi_write_cache_t(def, (write_buffers + written - 1), write_count - written);
+    }
 }
 
 uint8_t multi_operation_compatible_t(const uint64_t address_1, const uint64_t address_2)
 {
+    // Shifts to only contain index bits and compare them
     uint64_t ad1 = (address_1 << CACHE_TAG_BITS) >> CACHE_TAG_BITS >> CACHE_OFFSET_BITS;
     uint64_t ad2 = (address_2 << CACHE_TAG_BITS) >> CACHE_TAG_BITS >> CACHE_OFFSET_BITS;
     return (ad1 != ad2) ? 1 : 0;
 }
+
+
+
+
+
+static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count)
+{
+    uint8_t max = def->max_buffer_size;
+    uint64_t *base = def->accesses_buffer->write_buffer;
+    uint64_t current = def->accesses_buffer->w_buffer_count;
+    uint8_t written = 0;
+
+    while (current + written <= max || written < count)
+    {
+        if (address_compatibility_check(write_buffer[written], base, current) != 0)
+        {
+            return written;
+        }
+        base[current + written] = write_buffer[written];
+        written++;
+    }
+    return written;
+}
+
+static void flush_write(Definition *def)
+{
+    uint8_t count = def->accesses_buffer->w_buffer_count;
+    // Multithreaded sync
+}
+
+static uint8_t address_compatibility_check(const uint64_t address, const uint64_t *base_buffer, int base_buffer_count)
+{
+    for (int i = 0; i < base_buffer_count; i++)
+    {
+        const uint64_t base_address = base_buffer[i];
+        if (multi_operation_compatible_t(address, base_address) == 0)
+        {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+

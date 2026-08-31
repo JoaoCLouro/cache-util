@@ -34,7 +34,7 @@ typedef struct Definition Definition;
      * @param passkey The passkey to set for cache access.
      * @return Definition* Pointer to the struct holding the configuration values for the cache library.
      */
-    Definition* init_t (const uint64_t passkey);
+    Definition* m_init_t (const uint64_t passkey);
 
     /**
      * @brief Executes batch-mode sequence reads against multiple cache targets.
@@ -42,7 +42,7 @@ typedef struct Definition Definition;
      * @param read_addresses Array of 64-bit hardware address lines to look up.
      * @param address_count  Total size of the input pointer arrays (bounded by a uint8_t capacity).
      * @param byte_counts    Array containing execution read lengths matching each sequential lookup index.
-     * @param return_buffers Array of destination memory addresses receiving mapped data chunks.
+     * @param return_buffers Null terminated array of destination memory addresses receiving mapped data chunks.
      */
     void multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers);
 
@@ -50,9 +50,10 @@ typedef struct Definition Definition;
      * @brief Executes batch-mode sequence allocations into the cache space.
      * * Sequential iterations terminate gracefully upon encountering a null array pointer wrapper boundary.
      * @param def            Pointer to the definition struct holding the configuration values for the cache library.
-     * @param write_buffers  Null-terminated array of pointers containing the block entries to be written.
+     * @param write_buffers  Array of pointers containing the block entries to be written.
+     * @param write_count    Number of elements in the `write_buffer`
      */
-    void multi_write_cache_t(Definition* def, const void** write_buffers);
+    void multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count);
     
     /**
      * @brief Structural compatibility check to evaluate alignment invariants.
