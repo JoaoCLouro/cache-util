@@ -52,8 +52,10 @@ typedef struct Definition Definition;
      * @param def            Pointer to the definition struct holding the configuration values for the cache library.
      * @param write_buffers  Array of pointers containing the block entries to be written.
      * @param write_count    Number of elements in the `write_buffer`
+     * @return uint8_t       0 If all writes were compatible and executed successfully.
+     * @return uint8_t       -1 If the definition struct is null.
      */
-    void multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count);
+    uint8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count);
     
     /**
      * @brief Structural compatibility check to evaluate alignment invariants.
