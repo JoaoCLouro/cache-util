@@ -84,7 +84,7 @@ static uint8_t address_compatibility_check(const uint64_t address, const uint64_
 static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count);
 static uint8_t flush_write(Definition *def);
 static void *write_thread_func(void *arg);
-static uint8_t fill_read_buffer(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers);
+static uint8_t fill_read_buffer(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const void** return_buffers);
 static uint8_t flush_read(Definition *def);
 static void* read_thread_func(void *arg);
 void push(stack** s, pthread_mutex_t* mutex, uint64_t value);
@@ -235,7 +235,7 @@ CacheResult multi_read_cache_t(Definition* def, const uint64_t* read_addresses, 
         return result;
     }
 
-    uint8_t read = fill_read_buffer(def, read_addresses, address_count, byte_counts, return_buffers);
+    uint8_t read = fill_read_buffer(def, read_addresses, address_count, return_buffers);
     
     size_t current_bytes = 0;
     for (int i = 0; i < read; i++) {
@@ -469,11 +469,10 @@ static void *write_thread_func(void *arg)
  * @param def Pointer to the Definition struct.
  * @param read_addresses Pointer to array of addresses to read.
  * @param address_count Number of addresses to queue.
- * @param byte_counts Expected byte retrieval length per request.
  * @param return_buffers Array of destination memory addresses for output data.
  * @return uint8_t Number of reads successfully queued before hitting capacity or conflict.
  */
-static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
+static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const void** return_buffers)
 {
     uint8_t max = def->max_buffer_size;
     uint64_t *base_read = def->accesses_buffer->read_buffer;

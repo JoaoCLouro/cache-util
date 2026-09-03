@@ -28,7 +28,7 @@ typedef struct Definition Definition;
 /**
  * @brief Structure containing the pending accesses to be executed on the next flush call.
  */
-enum Error_Type {
+typedef enum Error_Type {
     NO_RETURN_BUFFER = -1,
     SUCCESS = 0,
     CACHE_MISS = 1,
