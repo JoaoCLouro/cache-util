@@ -165,7 +165,7 @@ Definition* m_init_t (const uint64_t passkey)
     return def;
 }
 
-uint8_t set_thread_count (Definition* def, const uint8_t thread_count)
+int8_t set_thread_count (Definition* def, const uint8_t thread_count)
 {
     if (def == NULL)
     {
@@ -187,7 +187,7 @@ uint8_t get_thread_count (const Definition* def)
     return def->thread_count;
 }
 
-uint8_t set_max_wait_size (Definition* def, const uint8_t size)
+int8_t set_max_wait_size (Definition* def, const uint8_t size)
 {
     if (def == NULL)
     {
@@ -229,14 +229,28 @@ void clean (Definition* def)
     def->accesses_buffer = calloc(1, sizeof(cache_accesses_buffer));
 }
 
-void flush (Definition* def)
+enum Error_Type flush (Definition* def)
 {
     if (def == NULL){
         return;
     }
-    // Read return buffer must be set 
-    flush_read(def);
-    flush_write(def);
+    if (flush_read(def) != 0 || flush_write(def) != 0)
+    {
+        switch (def->accesses_buffer->e->code)
+        {
+            case -1:
+                return NO_RETURN_BUFFER;
+            case 1:
+                return CACHE_MISS;
+            case 2:
+                return INVALID_PASSKEY;
+            case 3:
+                return IMPLEMENTATION_ERROR;
+            default:
+                return IMPLEMENTATION_ERROR;
+        }
+    }
+    return SUCCESS;
 }
 
 int8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
@@ -252,9 +266,14 @@ int8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const
     // Address incompatibility
     if (read == -1)
     {
-        flush(def);
-        multi_read_cache_t(def, read_addresses, address_count, byte_counts, return_buffers);
-        println("Buffers flushed!");
+        if (flush(def) == SUCCESS)
+        {
+            multi_read_cache_t(def, read_addresses, address_count, byte_counts, return_buffers);
+        }
+        else
+        {
+            return -1;
+        }
     }
     return (uint8_t) read;
 }
