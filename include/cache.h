@@ -43,8 +43,9 @@ typedef struct Definition Definition;
      * @param address_count  Total size of the input pointer arrays (bounded by a uint8_t capacity).
      * @param byte_counts    Array containing execution read lengths matching each sequential lookup index.
      * @param return_buffers Null terminated array of destination memory addresses receiving mapped data chunks.
+     * @return uint8_t       Number of successful reads executed or 0 if the definition struct is null.
      */
-    void multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers);
+    uint8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers);
 
     /**
      * @brief Executes batch-mode sequence allocations into the cache space.

@@ -163,16 +163,28 @@ void flush (Definition* def)
     if (def == NULL){
         return;
     }
-    // TODO: Implement flush function to execute all pending accesses in the buffer
+    flush_read(def);
+    flush_write(def);
 }
 
-void multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
+uint8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
 {
     if (def == NULL) 
     {
-        return;
+        return 0;
     }
-    // TODO: Implement multi_read_cache_t function
+
+    def ->accesses_buffer->return_buffers = (uint64_t**) return_buffers;
+    uint8_t read = fill_read_buffer(def, read_addresses, address_count, byte_counts);
+    
+    // Address incompatibility
+    if (read == -1)
+    {
+        flush(def);
+        multi_read_cache_t(def, read_addresses, address_count, byte_counts, return_buffers);
+        println("Buffers flushed!");
+    }
+    return read;
 }
 
 uint8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count)
