@@ -44,6 +44,7 @@ typedef struct Definition Definition;
      * @param byte_counts    Array containing execution read lengths matching each sequential lookup index.
      * @param return_buffers Null terminated array of destination memory addresses receiving mapped data chunks.
      * @return uint8_t       Number of successful reads executed or 0 if the definition struct is null.
+     * @warning              The maximum number of threads must be set before calling this function, otherwise the default value of 1 will be used.
      */
     uint8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers);
 
@@ -55,6 +56,7 @@ typedef struct Definition Definition;
      * @param write_count    Number of elements in the `write_buffer`
      * @return uint8_t       0 If all writes were compatible and executed successfully.
      * @return uint8_t       -1 If the definition struct is null.
+     * @warning              The maximum number of threads must be set before calling this function, otherwise the default value of 1 will be used.
      */
     uint8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count);
     

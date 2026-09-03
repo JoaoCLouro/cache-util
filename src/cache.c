@@ -220,7 +220,13 @@ uint8_t multi_operation_compatible_t(const uint64_t address_1, const uint64_t ad
 //  Helper methods
 // ======================================================================================
 
-
+/**
+ * @brief Fills the write buffer with the given addresses, checking for compatibility with existing addresses in the read and write buffers.
+ * @param def Pointer to the definition struct holding the configuration values for the cache library.
+ * @param write_buffer Pointer to the array of addresses to be written.
+ * @param count Number of addresses in the write_buffer.
+ * @return uint8_t Number of addresses successfully written to the buffer.
+ */
 static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count)
 {
     uint8_t max = def->max_buffer_size;
@@ -247,12 +253,19 @@ static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, 
     return written;
 }
 
+/**
+ * @brief Flushes the write buffer by executing all pending write operations concurrently using multiple threads.
+ * @param def Pointer to the definition struct holding the configuration values for the cache library.
+ * @warning The thread-count const defined on this file must be set to the number of threads the in use cpu has or bellow.
+ */
 static void flush_write(Definition *def)
 {
     uint8_t count = def->accesses_buffer->w_buffer_count;
     // Multithreaded sync
 
     // Thread count definition
+    // Note: Thread count is not limited to the number of threads available by the CPU for maximum compatibility with the cache library,
+    // but it is recommended to set it to the number of threads available by the CPU or below for optimal performance.
     uint8_t thread_count = (count > def->thread_count)? def->thread_count : count;
     init_stack_with_thread_count(s,thread_count);
 
