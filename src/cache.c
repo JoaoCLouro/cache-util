@@ -33,8 +33,6 @@ typedef struct error {
     uint8_t is_fatal;
 } error;
 
-error* e = NULL;
-
 
 
 // ======================
@@ -150,7 +148,8 @@ Definition* m_init_t (const uint64_t passkey)
     def->thread_count = 1;
     def->max_buffer_size = def->thread_count * 2; // Each thread can have at most 2 pending accesses (1 read and 1 write)
     def->passkey = passkey;
-    def->accesses_buffer = malloc(sizeof(cache_accesses_buffer));
+    // calloc for a clean allocation, not garbage values
+    def->accesses_buffer = calloc(1, sizeof(cache_accesses_buffer));
     return def;
 }
 
@@ -215,7 +214,7 @@ void clean (Definition* def)
         free(def->accesses_buffer->return_buffers[i]);
     }
     free(def->accesses_buffer);
-    def->accesses_buffer = malloc(sizeof(cache_accesses_buffer));
+    def->accesses_buffer = calloc(1, sizeof(cache_accesses_buffer));
 }
 
 void flush (Definition* def)
