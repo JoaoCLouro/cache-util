@@ -16,99 +16,30 @@ enum OperationType {
     WRITE
 };
 
-
-
-// =================
-// Args definition
-// =================
-
 /**
- * @brief Struct holding the arguments for the write and read functions.
- * * This struct is used to hold the arguments for the write and read functions,
- * * such as the address to be accessed, the passkey for the cache library, and the index of the thread executing the access.
- */
-typedef struct access_args {
-    uint64_t address;
-    uint64_t* return_buffer;
-    uint64_t passkey;
-    uint8_t thread_idx;
-    uint8_t exit_code;      // Only for read
-} access_args;
-
-access_args* args = NULL;
-
-
-
-// ======================
-// Stack Implementation
-// ======================
-
-/**
- * @brief Simple stack implementation to hold the available thread indexes for multi-threaded execution.
- * * This stack is used to hold the available thread indexes for multi-threaded execution.
- * * It is used to keep track of which threads are currently executing and which are available for new accesses.
- * * The stack is initialized with the number of threads to use at once, and
- * * * the available thread indexes are pushed onto the stack.
- * * When a thread is created to execute an access, it pops an index from the stack
- * * * and uses it to execute the access. When the access is finished, the index is pushed back onto the stack to be used by another access.
- * * The stack is implemented as a linked list, with each node containing a value and a pointer to the next node.
+ * @brief Thread-safe stack implementation to hold available thread indexes or memory addresses.
+ * * Uses uint64_t to safely store either a thread index or a 64-bit hardware address without truncation.
+ * * Manipulations of this stack should be protected by a mutex in multi-threaded contexts.
  */
 typedef struct stack {
-    uint8_t value;
+    uint64_t value;
     struct stack* next;
 } stack;
 
-stack* s = NULL;
-
-// ==================
-// Stack Prototypes
-// ==================
-
-void init_stack_with_thread_count (stack* s, uint8_t count);
-void clear_stack (stack* s);
-void push (stack* s, uint8_t value);
-uint8_t pop (stack* s);
-
-
-
-// ==============
-// Error struct
-// ==============
-
 /**
  * @brief Struct holding the error information for the cache library.
- * * This struct is used to hold the error information for the cache library,
- * * such as the error code, the type of operation being executed, and whether the error is fatal or not.
+ * * Tracks the error code, the operation type that failed, and a stack of addresses that caused cache misses.
  */
 typedef struct error {
-    // -1   -> No return buffer set
-    // 0    -> success,
-    // 1    -> cache miss,
-    // 2    -> invalid passkey,
-    // 3    -> implementation error (report)
     int8_t code;   
     enum OperationType type;
     uint8_t is_fatal;
-    // Failed accesses addresses cache
-    stack* s;
+    stack* s; // Failed accesses addresses stack
 } error;
-
-
-
-// =======================
-// Cache accesses buffer
-// =======================
 
 /**
  * @brief Private buffer holding the pending accesses to be executed on the next flush call.
- * * This buffer is used to store the pending accesses to be executed on the next flush call.
- * * It contains a buffer of addresses to be read and a buffer of addresses to be written,
- * * * as well as the return buffers for the read operations and counters for each of them.
- * * As soon as the total accesses pending count reaches the max buffer size,
- * * * the flush function is called to execute all the pending accesses.
- * * The flush function will try to multi-thread the current accesses to speed up execution time.
- * * The thread-count const defined on this file must be set to the number of threads the in use cpu has or bellow.
- * ** the clean function can be used to delete all accesses that are on hold, so they will never be executed.
+ * * Contains buffers for read/write addresses, return destinations, and tracks current buffer capacities.
  */
 typedef struct cache_accesses_buffer {
     uint64_t* read_buffer;
@@ -120,6 +51,9 @@ typedef struct cache_accesses_buffer {
     error* e;
 } cache_accesses_buffer;
 
+/**
+ * @brief Struct holding the core configuration and active buffers for the cache library instance.
+ */
 struct Definition {
     uint8_t thread_count;
     uint8_t max_buffer_size;
@@ -127,85 +61,108 @@ struct Definition {
     cache_accesses_buffer* accesses_buffer;
 };
 
+/**
+ * @brief Thread-local payload holding arguments for read and write concurrent worker threads.
+ * * Securely scoped per-thread to prevent data races. Contains local pointers to sync mutexes and stacks.
+ */
+typedef struct access_args {
+    uint64_t address;
+    uint64_t* return_buffer;
+    uint64_t passkey;
+    uint8_t thread_idx;
+    uint8_t exit_code;
+    stack** local_stack;
+    pthread_mutex_t* stack_mutex;
+} access_args;
+
 
 // ==============
 // Prototypes
 // ==============
 
-// Common
-
 static uint8_t address_compatibility_check(const uint64_t address, const uint64_t *base_buffer, int base_buffer_count);
-
-// Write
-
 static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count);
 static uint8_t flush_write(Definition *def);
-static void *write(void *arg);
-
-// Read
-
-static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts);
+static void *write_thread_func(void *arg);
+static uint8_t fill_read_buffer(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers);
 static uint8_t flush_read(Definition *def);
-static void* read (void *arg);
-
+static void* read_thread_func(void *arg);
+void push(stack** s, pthread_mutex_t* mutex, uint64_t value);
+int64_t pop(stack** s, pthread_mutex_t* mutex);
 
 
 // ============================================================================
 // Init, Getters and Setters Functions
 // ============================================================================
 
+/**
+ * @brief Initializes the cache environment and sets up the internal buffering system.
+ * @param passkey The verification key for cache access.
+ * @return Definition* Pointer to the fully allocated struct holding configuration values.
+ */
 Definition* m_init_t (const uint64_t passkey)
 {
     Definition* def = malloc(sizeof(Definition));
     def->thread_count = 1;
-    def->max_buffer_size = def->thread_count * 2; // Each thread can have at most 2 pending accesses (1 read and 1 write)
+    def->max_buffer_size = def->thread_count * 2; 
     def->passkey = passkey;
-    // calloc for a clean allocation, not garbage values
+    
     def->accesses_buffer = calloc(1, sizeof(cache_accesses_buffer));
+    def->accesses_buffer->read_buffer = calloc(def->max_buffer_size, sizeof(uint64_t));
+    def->accesses_buffer->write_buffer = calloc(def->max_buffer_size, sizeof(uint64_t));
+    def->accesses_buffer->return_buffers = calloc(def->max_buffer_size, sizeof(uint64_t*));
+    def->accesses_buffer->e = calloc(1, sizeof(error));
+    
     return def;
 }
 
+/**
+ * @brief Sets the maximum number of concurrent threads to use during batched operations.
+ * @param def Pointer to the Definition configuration struct.
+ * @param thread_count Desired number of threads (1 to 64).
+ * @return int8_t 1 on success, 0 if null, -1 if out of bounds.
+ */
 int8_t set_thread_count (Definition* def, const uint8_t thread_count)
 {
-    if (def == NULL)
-    {
-        return 0;
-    }
-    else if (thread_count == 0 || thread_count > 64) {
-        return -1;
-    }
+    if (def == NULL) return 0;
+    if (thread_count == 0 || thread_count > 64) return -1;
     def->thread_count = thread_count;
     return 1;
 }
 
+/**
+ * @brief Retrieves the current max thread count configuration.
+ * @param def Pointer to the Definition configuration struct.
+ * @return uint8_t Current thread count, or 0 if def is null.
+ */
 uint8_t get_thread_count (const Definition* def)
 {
-    if (def == NULL)
-    {
-        return 0;
-    }
+    if (def == NULL) return 0;
     return def->thread_count;
 }
 
+/**
+ * @brief Sets the capacity trigger limit for the pending batch operations buffer.
+ * @param def Pointer to the Definition configuration struct.
+ * @param size Desired maximum buffer size before automatic flush occurs (1 to 128).
+ * @return int8_t 1 on success, 0 if null, -1 if out of bounds.
+ */
 int8_t set_max_wait_size (Definition* def, const uint8_t size)
 {
-    if (def == NULL)
-    {
-        return 0;
-    }
-    else if (size == 0 || size > 128) {
-        return -1;
-    }
+    if (def == NULL) return 0;
+    if (size == 0 || size > 128) return -1;
     def->max_buffer_size = size;
     return 1;
 }
 
+/**
+ * @brief Retrieves the current capacity trigger limit.
+ * @param def Pointer to the Definition configuration struct.
+ * @return uint8_t Current max buffer size, or 0 if def is null.
+ */
 uint8_t get_max_wait_size (const Definition* def)
 {
-    if (def == NULL)
-    {
-        return 0;
-    }
+    if (def == NULL) return 0;
     return def->max_buffer_size;
 }
 
@@ -213,96 +170,109 @@ uint8_t get_max_wait_size (const Definition* def)
 // Cache Operations Interface
 // ============================================================================
 
+/**
+ * @brief Safely clears and reallocates all internal accesses buffers, dropping unexecuted requests.
+ * @param def Pointer to the Definition configuration struct.
+ * @warning Any pending writes in the buffer will be permanently lost without executing.
+ */
 void clean (Definition* def)
 {
-    if (def == NULL)
-    {
-        return;
-    }
-    // Free all the pending accesses buffers and allocate new ones
+    if (def == NULL) return;
+    
     free(def->accesses_buffer->read_buffer);
     free(def->accesses_buffer->write_buffer);
-    for (int i = 0; i < def->accesses_buffer->return_buffers_count; i++) {
-        free(def->accesses_buffer->return_buffers[i]);
-    }
+    free(def->accesses_buffer->return_buffers);
+    free(def->accesses_buffer->e);
     free(def->accesses_buffer);
+    
     def->accesses_buffer = calloc(1, sizeof(cache_accesses_buffer));
+    def->accesses_buffer->read_buffer = calloc(def->max_buffer_size, sizeof(uint64_t));
+    def->accesses_buffer->write_buffer = calloc(def->max_buffer_size, sizeof(uint64_t));
+    def->accesses_buffer->return_buffers = calloc(def->max_buffer_size, sizeof(uint64_t*));
+    def->accesses_buffer->e = calloc(1, sizeof(error));
 }
 
+/**
+ * @brief Manually triggers the multi-threaded execution of all currently pending read and write operations.
+ * @param def Pointer to the Definition configuration struct.
+ * @return enum Error_Type Status of the execution (SUCCESS, CACHE_MISS, INVALID_PASSKEY, etc).
+ */
 enum Error_Type flush (Definition* def)
 {
-    if (def == NULL){
-        return;
-    }
+    if (def == NULL) return IMPLEMENTATION_ERROR;
+    
     if (flush_read(def) != 0 || flush_write(def) != 0)
     {
         switch (def->accesses_buffer->e->code)
         {
-            case -1:
-                return NO_RETURN_BUFFER;
-            case 1:
-                return CACHE_MISS;
-            case 2:
-                return INVALID_PASSKEY;
-            case 3:
-                return IMPLEMENTATION_ERROR;
-            default:
-                return IMPLEMENTATION_ERROR;
+            case -1: return NO_RETURN_BUFFER;
+            case 1:  return CACHE_MISS;
+            case 2:  return INVALID_PASSKEY;
+            case 3:  return IMPLEMENTATION_ERROR;
+            default: return IMPLEMENTATION_ERROR;
         }
     }
     return SUCCESS;
 }
 
+/**
+ * @brief Executes batch-mode sequence reads against multiple cache targets. Pushes to buffer and flushes if full or incompatible.
+ * @param def Pointer to the Definition configuration struct.
+ * @param read_addresses Array of 64-bit hardware addresses to look up.
+ * @param address_count Total number of lookups.
+ * @param byte_counts Array containing execution read lengths matching each sequential lookup index.
+ * @param return_buffers Null terminated array of destination memory addresses receiving mapped data chunks.
+ * @return int8_t 0 on total success, -1 if a fatal execution error occurs.
+ */
 int8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
 {
-    if (def == NULL) 
-    {
-        return -1;
-    }
+    if (def == NULL) return -1;
 
-    def ->accesses_buffer->return_buffers = (uint64_t**) return_buffers;
-    int8_t read = fill_read_buffer(def, read_addresses, address_count, byte_counts);
+    uint8_t read = fill_read_buffer(def, read_addresses, address_count, byte_counts, return_buffers);
     
-    // Address incompatibility
-    if (read == -1)
+    if (read != address_count)
     {
-        if (flush(def) == SUCCESS)
-        {
-            multi_read_cache_t(def, read_addresses, address_count, byte_counts, return_buffers);
-        }
-        else
-        {
+        if (flush(def) == SUCCESS) {
+            multi_read_cache_t(def, read_addresses + read, address_count - read, byte_counts + read, return_buffers + read);
+        } else {
             return -1;
         }
-    }
-    return (uint8_t) read;
-}
-
-int8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count)
-{
-    if (def == NULL) 
-    {
-        return -1;
-    }
-    
-    // Calculates and writes to the buffer the possible compatible addresses
-    uint8_t written = fill_write_buffer(def, write_buffers, write_count);
-
-    // If at least one was incompatible flush the buffer and start over
-    if (written != write_count)
-    {
-        // Triggers execution
-        flush(def);
-        multi_write_cache_t(def, (write_buffers + (written - 1) * sizeof(uint64_t)), write_count - written);
     }
     return 0;
 }
 
+/**
+ * @brief Executes batch-mode sequence allocations into the cache space. Pushes to buffer and flushes if full or incompatible.
+ * @param def Pointer to the Definition configuration struct.
+ * @param write_buffers Array of pointers containing the block entries to be written.
+ * @param write_count Number of elements to write.
+ * @return int8_t 0 on success, -1 if the definition struct is null.
+ */
+int8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count)
+{
+    if (def == NULL) return -1;
+    
+    uint8_t written = fill_write_buffer(def, write_buffers, write_count);
+
+    if (written != write_count)
+    {
+        flush(def);
+        multi_write_cache_t(def, write_buffers + written, write_count - written);
+    }
+    return 0;
+}
+
+/**
+ * @brief Evaluates structural cache alignment invariants between two memory blocks.
+ * @param address_1 First 64-bit target address.
+ * @param address_2 Second 64-bit target address.
+ * @return uint8_t 1 if both addresses map to the exact same cache set index boundary, 0 otherwise.
+ */
 uint8_t multi_operation_compatible_t(const uint64_t address_1, const uint64_t address_2)
 {
-    // Shifts to only contain index bits and compare them
-    uint64_t ad1 = (address_1 << CACHE_TAG_BITS) >> CACHE_TAG_BITS >> CACHE_OFFSET_BITS;
-    uint64_t ad2 = (address_2 << CACHE_TAG_BITS) >> CACHE_TAG_BITS >> CACHE_OFFSET_BITS;
+    uint64_t index_mask = (1ULL << CACHE_INDEX_BITS) - 1;
+    uint64_t ad1 = (address_1 >> CACHE_OFFSET_BITS) & index_mask;
+    uint64_t ad2 = (address_2 >> CACHE_OFFSET_BITS) & index_mask;
     return (ad1 != ad2) ? 1 : 0;
 }
 
@@ -312,11 +282,11 @@ uint8_t multi_operation_compatible_t(const uint64_t address_1, const uint64_t ad
 // ======================================================================================
 
 /**
- * @brief Fills the write buffer with the given addresses, checking for compatibility with existing addresses in the read and write buffers.
- * @param def Pointer to the definition struct holding the configuration values for the cache library.
- * @param write_buffer Pointer to the array of addresses to be written.
- * @param count Number of addresses in the write_buffer.
- * @return uint8_t Number of addresses successfully written to the buffer.
+ * @brief Fills the write buffer, checking for cache-line conflicts with existing queued read/write operations.
+ * @param def Pointer to the Definition struct.
+ * @param write_buffer Pointer to the array of addresses to be queued for writing.
+ * @param count Number of addresses to queue.
+ * @return uint8_t Number of addresses successfully queued before hitting capacity or conflict.
  */
 static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count)
 {
@@ -327,105 +297,131 @@ static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, 
     uint64_t read_current = def->accesses_buffer->r_buffer_count;
     uint8_t written = 0;
 
-    while (write_current + written <= max || written < count)
+    while (write_current + written <= max && written < count)
     {
-        if (address_compatibility_check(write_buffer[written], base_write, write_current) != 0)
-        {
-            return written;
-        }
-        if (address_compatibility_check(write_buffer[written], base_read, read_current) != 0)
+        if (address_compatibility_check(write_buffer[written], base_write, write_current) != 0 ||
+            address_compatibility_check(write_buffer[written], base_read, read_current) != 0)
         {
             return written;
         }
         base_write[write_current + written] = write_buffer[written];
         written++;
     }
-
+    def->accesses_buffer->w_buffer_count += written;
     return written;
 }
 
 /**
- * @brief Flushes the write buffer by executing all pending write operations concurrently using multiple threads.
- * @param def Pointer to the definition struct holding the configuration values for the cache library.
- * @warning The thread-count const defined on this file must be set to the number of threads the in use cpu has or bellow.
+ * @brief Dispatches POSIX threads to execute all pending write operations concurrently.
+ * @param def Pointer to the Definition struct.
+ * @return uint8_t 0 on success, 1 if any child thread reported a fatal error.
  */
 static uint8_t flush_write(Definition *def)
 {
     uint8_t count = def->accesses_buffer->w_buffer_count;
-    // Multithreaded sync
+    if (count == 0) return 0;
 
-    // Thread count definition
-    // Note: Thread count is not limited to the number of threads available by the CPU for maximum compatibility with the cache library,
-    // but it is recommended to set it to the number of threads available by the CPU or below for optimal performance.
-    uint8_t thread_count = (count > def->thread_count)? def->thread_count : count;
-    init_stack_with_thread_count(s,thread_count);
-
-    pthread_t thread_array[thread_count];
-
+    uint8_t thread_count = (count > def->thread_count) ? def->thread_count : count;
     
-    // writing loop
+    pthread_t *thread_array = calloc(thread_count, sizeof(pthread_t));
+    uint8_t *thread_active = calloc(thread_count, sizeof(uint8_t));
+    access_args **thread_args = calloc(thread_count, sizeof(access_args*));
+
+    stack* local_stack = NULL;
+    pthread_mutex_t local_mutex = PTHREAD_MUTEX_INITIALIZER;
+    
+    for (int i = thread_count - 1; i >= 0; i--) {
+        push(&local_stack, &local_mutex, i);
+    }
+
+    uint8_t error_occurred = 0;
+
     for (int i = 0; i < count; i++)
     {
-        int8_t idx = pop(s);
+        int64_t idx = pop(&local_stack, &local_mutex);
         if (idx != -1)
         {
-            if (!args)
-            {
-                // Creates and populates the args struct
-                access_args *args = malloc(sizeof(*args));
-            }
-            args->address = def->accesses_buffer->write_buffer[i];
-            args->passkey = def->passkey;
-            args->thread_idx = idx;
-            args->exit_code = 0;
-            // Creates the thread to execute the write operation
-            pthread_create(&thread_array[idx], NULL, write, args);
-            if (args->exit_code != 0)
-            {
-                switch (args->exit_code)
-                {
-                    // Invalid passkey
-                    case 2:
-                        def->accesses_buffer->e->code = 2;
-                        def->accesses_buffer->e->type = WRITE;
-                        def->accesses_buffer->e->is_fatal = 1;
-                        return 1;
-                    // Implementation error (3)
-                    default:
-                        println("Unreachable");
-                        return 1;
+            if (thread_active[idx]) {
+                pthread_join(thread_array[idx], NULL);
+                if (thread_args[idx]->exit_code != 0) {
+                    def->accesses_buffer->e->code = thread_args[idx]->exit_code;
+                    def->accesses_buffer->e->type = WRITE;
+                    def->accesses_buffer->e->is_fatal = 1;
+                    error_occurred = 1;
                 }
-                clean_args(args);
+                free(thread_args[idx]);
+                thread_active[idx] = 0;
             }
 
+            if (error_occurred) {
+                push(&local_stack, &local_mutex, idx);
+                break;
+            }
+
+            access_args *t_args = calloc(1, sizeof(access_args));
+            t_args->address = def->accesses_buffer->write_buffer[i];
+            t_args->passkey = def->passkey;
+            t_args->thread_idx = (uint8_t)idx;
+            t_args->local_stack = &local_stack;
+            t_args->stack_mutex = &local_mutex;
+            
+            thread_args[idx] = t_args;
+            thread_active[idx] = 1;
+            
+            pthread_create(&thread_array[idx], NULL, write_thread_func, t_args);
         } 
         else
         {
-            // Keeps the loop on the same access
-            i--;
+            i--; 
         }
     }
-    clear_stack(s);
-    return 0;
-}
 
-static void *write(void *arg)
-{
-    access_args *args = arg;
-    uint64_t code = write_cache_t(args->address, args->passkey);
-    if (code == 0)
-    {
-        push(s, args->thread_idx);
-        clean_args(args);
-        return NULL;
+    for (int i = 0; i < thread_count; i++) {
+        if (thread_active[i]) {
+            pthread_join(thread_array[i], NULL);
+            if (thread_args[i]->exit_code != 0 && !error_occurred) {
+                def->accesses_buffer->e->code = thread_args[i]->exit_code;
+                def->accesses_buffer->e->type = WRITE;
+                def->accesses_buffer->e->is_fatal = 1;
+                error_occurred = 1;
+            }
+            free(thread_args[i]);
+        }
     }
-    args->exit_code = code;
-    push(s, args->thread_idx);
+
+    while (pop(&local_stack, NULL) != -1);
+    free(thread_array);
+    free(thread_active);
+    free(thread_args);
+
+    def->accesses_buffer->w_buffer_count = 0;
+    return error_occurred ? 1 : 0;
 }
 
+/**
+ * @brief Thread entry point for executing direct write instructions.
+ * @param arg Pointer to thread-local access_args configuration payload.
+ * @return void* Always NULL.
+ */
+static void *write_thread_func(void *arg)
+{
+    access_args *args = (access_args *)arg;
+    uint64_t code = write_cache_t(args->address, args->passkey);
+    args->exit_code = code;
+    push(args->local_stack, args->stack_mutex, args->thread_idx);
+    return NULL;
+}
 
-
-static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts)
+/**
+ * @brief Fills the read buffer, checking for cache-line conflicts with existing queued read/write operations.
+ * @param def Pointer to the Definition struct.
+ * @param read_addresses Pointer to array of addresses to read.
+ * @param address_count Number of addresses to queue.
+ * @param byte_counts Expected byte retrieval length per request.
+ * @param return_buffers Array of destination memory addresses for output data.
+ * @return uint8_t Number of reads successfully queued before hitting capacity or conflict.
+ */
+static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
 {
     uint8_t max = def->max_buffer_size;
     uint64_t *base_read = def->accesses_buffer->read_buffer;
@@ -434,117 +430,140 @@ static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses
     uint64_t write_current = def->accesses_buffer->w_buffer_count;
     uint8_t read = 0;
 
-    while (read_current + read <= max || read < address_count)
+    while (read_current + read <= max && read < address_count)
     {
-        if (address_compatibility_check(read_addresses[read], base_read, read_current) != 0)
-        {
-            return read;
-        }
-        if (address_compatibility_check(read_addresses[read], base_write, write_current) != 0)
+        if (address_compatibility_check(read_addresses[read], base_read, read_current) != 0 ||
+            address_compatibility_check(read_addresses[read], base_write, write_current) != 0)
         {
             return read;
         }
         base_read[read_current + read] = read_addresses[read];
+        def->accesses_buffer->return_buffers[read_current + read] = (uint64_t*)return_buffers[read]; 
         read++;
     }
-
+    
+    def->accesses_buffer->r_buffer_count += read;
     return read;
 }
 
+/**
+ * @brief Dispatches POSIX threads to execute all pending read operations concurrently.
+ * @param def Pointer to the Definition struct.
+ * @return uint8_t 0 on success, 1 if any child thread reported a fatal error or cache miss.
+ */
 static uint8_t flush_read(Definition *def)
 {
-    if (def->accesses_buffer->return_buffers == NULL)
-    {
-        def->accesses_buffer->e->code = -1;
-        def->accesses_buffer->e->type = READ;
-        def->accesses_buffer->e->is_fatal = 1;
-        return 1;
+    uint8_t count = def->accesses_buffer->r_buffer_count;
+    if (count == 0) return 0;
+
+    uint8_t thread_count = (count > def->thread_count) ? def->thread_count : count;
+    
+    pthread_t *thread_array = calloc(thread_count, sizeof(pthread_t));
+    uint8_t *thread_active = calloc(thread_count, sizeof(uint8_t));
+    access_args **thread_args = calloc(thread_count, sizeof(access_args*));
+
+    stack* local_stack = NULL;
+    pthread_mutex_t local_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_t error_stack_mutex = PTHREAD_MUTEX_INITIALIZER;
+    
+    for (int i = thread_count - 1; i >= 0; i--) {
+        push(&local_stack, &local_mutex, i);
     }
 
-    uint8_t count = def->accesses_buffer->r_buffer_count;
-    // Multithreaded sync
+    uint8_t error_occurred = 0;
 
-    // Thread count definition
-    // Note: Thread count is not limited to the number of threads available by the CPU for maximum compatibility with the cache library,
-    // but it is recommended to set it to the number of threads available by the CPU or below for optimal performance.
-    uint8_t thread_count = (count > def->thread_count)? def->thread_count : count;
-    init_stack_with_thread_count(s,thread_count);
-
-    pthread_t thread_array[thread_count];
-
-    
-    // writing loop
     for (int i = 0; i < count; i++)
     {
-        int8_t idx = pop(s);
+        int64_t idx = pop(&local_stack, &local_mutex);
         if (idx != -1)
         {
-            if (!args)
-            {
-                // Creates and populates the args struct
-                access_args *args = malloc(sizeof(*args));
-            }
-            
-            args->address = def->accesses_buffer->read_buffer[i];
-            args->return_buffer = def->accesses_buffer->return_buffers[i];
-            args->passkey = def->passkey;
-            args->thread_idx = idx;
-            args->exit_code = 0;
-            // Creates the thread to execute the read operation
-            pthread_create(&thread_array[idx], NULL, read, args);
-            if (args->exit_code != 0)
-            {
-                switch (args->exit_code)
-                {
-                    // Cache miss
-                    case 1:
-                        def->accesses_buffer->e->code = 1;
-                        def->accesses_buffer->e->type = READ;
-                        def->accesses_buffer->e->is_fatal = 1;
-                        push(def->accesses_buffer->e->s, args->address);
-                        return 1;
-                    // Invalid passkey
-                    case 2:
-                        def->accesses_buffer->e->code = 2;
-                        def->accesses_buffer->e->type = READ;
-                        def->accesses_buffer->e->is_fatal = 1;
-                        return 1;
-                    // Implementation error (3)
-                    default:
-                        def->accesses_buffer->e->code = 3;
-                        def->accesses_buffer->e->type = READ;
-                        def->accesses_buffer->e->is_fatal = 1;
-                        return 1;
+            if (thread_active[idx]) {
+                pthread_join(thread_array[idx], NULL);
+                
+                if (thread_args[idx]->exit_code != 0) {
+                    def->accesses_buffer->e->code = thread_args[idx]->exit_code;
+                    def->accesses_buffer->e->type = READ;
+                    def->accesses_buffer->e->is_fatal = 1;
+                    if (thread_args[idx]->exit_code == 1) { 
+                        push(&(def->accesses_buffer->e->s), &error_stack_mutex, thread_args[idx]->address);
+                    }
+                    error_occurred = 1;
                 }
-                clean_args(args);
+                free(thread_args[idx]);
+                thread_active[idx] = 0;
             }
             
+            if (error_occurred) {
+                push(&local_stack, &local_mutex, idx);
+                break;
+            }
+
+            access_args *t_args = calloc(1, sizeof(access_args));
+            t_args->address = def->accesses_buffer->read_buffer[i];
+            t_args->return_buffer = def->accesses_buffer->return_buffers[i];
+            t_args->passkey = def->passkey;
+            t_args->thread_idx = (uint8_t)idx;
+            t_args->local_stack = &local_stack;
+            t_args->stack_mutex = &local_mutex;
+            
+            thread_args[idx] = t_args;
+            thread_active[idx] = 1;
+            
+            pthread_create(&thread_array[idx], NULL, read_thread_func, t_args);
         } 
         else
         {
-            // Keeps the loop on the same access
             i--;
         }
     }
-    clear_stack(s);
-    return 0;
-}
 
-static void* read (void *arg)
-{
-    access_args *args = arg;
-    uint64_t code = read_cache_t(args->address, args->passkey, 8, args->thread_idx);
-    if (code == 0)
-    {
-        push(s, args->thread_idx);
-        clean_args(args);
-        return NULL;
+    for (int i = 0; i < thread_count; i++) {
+        if (thread_active[i]) {
+            pthread_join(thread_array[i], NULL);
+            if (thread_args[i]->exit_code != 0) {
+                def->accesses_buffer->e->code = thread_args[i]->exit_code;
+                def->accesses_buffer->e->type = READ;
+                def->accesses_buffer->e->is_fatal = 1;
+                if (thread_args[i]->exit_code == 1) { 
+                    push(&(def->accesses_buffer->e->s), &error_stack_mutex, thread_args[i]->address);
+                }
+                error_occurred = 1;
+            }
+            free(thread_args[i]);
+        }
     }
-    args->exit_code = code;
-    push(s, args->thread_idx);
+
+    while (pop(&local_stack, NULL) != -1);
+    free(thread_array);
+    free(thread_active);
+    free(thread_args);
+
+    def->accesses_buffer->r_buffer_count = 0;
+    return error_occurred ? 1 : 0;
 }
 
+/**
+ * @brief Thread entry point for executing direct read instructions.
+ * @param arg Pointer to thread-local access_args configuration payload.
+ * @return void* Always NULL.
+ */
+static void* read_thread_func(void *arg)
+{
+    access_args *args = (access_args *)arg;
+    uint64_t code = read_cache_t(args->address, args->return_buffer, 8, args->passkey);
+    args->exit_code = code;
+    
+    push(args->local_stack, args->stack_mutex, args->thread_idx);
+    return NULL;
+}
 
+/**
+ * @brief Checks if an address clashes with any address inside a pre-populated execution buffer.
+ * @param address The target address to test.
+ * @param base_buffer Array of already-queued addresses.
+ * @param base_buffer_count Number of active elements in the base_buffer.
+ * @return uint8_t 0 if compatible, -1 if a cache set conflict exists.
+ */
 static uint8_t address_compatibility_check(const uint64_t address, const uint64_t *base_buffer, int base_buffer_count)
 {
     for (int i = 0; i < base_buffer_count; i++)
@@ -559,88 +578,48 @@ static uint8_t address_compatibility_check(const uint64_t address, const uint64_
 }
 
 
-
-
 // ===================================
-// Simple stack implementation
+// Safe Stack Implementation
 // ===================================
 
 /**
- * @brief Pushes all numbers from \count - 1 to 0 to the stack
- * @param s Pointer to the stack root struct
- * @param counter Biggest number to push
- * @warning pushes all numbers from \counter - 1 to 0 to the stack
+ * @brief Pushes a value onto a linked-list stack, safely locking if a mutex is provided.
+ * @param s Double pointer to the head of the target stack.
+ * @param mutex Pointer to a pthread_mutex_t for thread-safety (can be NULL for single-threaded init).
+ * @param value The uint64_t value to push onto the stack.
  */
-void init_stack_with_thread_count (stack* s, uint8_t count)
-{
-    for (int i = count - 1; i >= 0; i--)
-    {
-        push(s, i);
-    }
-}
-
-/**
- * @brief Clear the stack of all its elements
- * @param s Pointer to the stack root struct
- * @warning Will loose all values on the stack
- */
-void clear_stack (stack* s)
-{
-    while (s != NULL)
-    {
-        pop(s);
-    }
-}
-
-/**
-* @brief Adds an element on to the stack or initializes if it is not yet initialized
-* @param s Pointer to the stack root struct
-* @param value Void pointer to the value push
-* @warning  value should not be null
-*
-*/
-void push (stack* s, uint8_t value)
+void push(stack** s, pthread_mutex_t* mutex, uint64_t value)
 {
     stack* tmp = calloc(1, sizeof(stack));
     tmp->value = value;
-    tmp->next = s;
-    s = tmp;
+    
+    if (mutex) pthread_mutex_lock(mutex);
+    tmp->next = *s;
+    *s = tmp;
+    if (mutex) pthread_mutex_unlock(mutex);
 }
 
 /**
-* @brief Removes an element from the top of the stack or returns -1 if empty
-* @param s Pointer to the stack root struct
-* @returns the value at the top of the stack if possible
-* @warning Returns -1 if the stack is empty
-*/
-uint8_t pop (stack* s)
+ * @brief Pops a value from a linked-list stack, safely locking if a mutex is provided.
+ * @param s Double pointer to the head of the target stack.
+ * @param mutex Pointer to a pthread_mutex_t for thread-safety (can be NULL for single-threaded cleanup).
+ * @return int64_t The popped value, or -1 if the stack is currently empty.
+ */
+int64_t pop(stack** s, pthread_mutex_t* mutex)
 {
-    if (s == NULL)
+    if (mutex) pthread_mutex_lock(mutex);
+    
+    if (*s == NULL)
     {
+        if (mutex) pthread_mutex_unlock(mutex);
         return -1;
     }
 
-    uint8_t tmp = s->value;
-    stack* tmp_stack = s->next;
-    free(s);
-    s = tmp_stack;
-    return tmp;
-}
-
-// ==============
-// Args Helpers
-// ==============
-
-/**
- * @brief Cleans the args struct to avoid garbage values
- * @param args Pointer to the access_args struct
- * @warning Cleans the args struct to avoid garbage values
- */
-static void clean_args(access_args* args)
-{
-    args->address = 0;
-    args->return_buffer = NULL;
-    args->passkey = 0;
-    args->thread_idx = 0;
-    args->exit_code = 0;
+    uint64_t tmp = (*s)->value;
+    stack* tmp_stack = (*s)->next;
+    free(*s);
+    *s = tmp_stack;
+    
+    if (mutex) pthread_mutex_unlock(mutex);
+    return (int64_t)tmp;
 }
