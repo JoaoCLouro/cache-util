@@ -2,9 +2,76 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+
 // ============================================================================
 // Internal Structs and Types Definitions
 // ============================================================================
+
+/**
+ * @brief Enum defining the type of operation being executed on the cache.
+ */
+enum OperationType {
+    READ,
+    WRITE
+};
+
+
+
+// ==============
+// Error struct
+// ==============
+
+/**
+ * @brief Struct holding the error information for the cache library.
+ * * This struct is used to hold the error information for the cache library,
+ * * such as the error code, the type of operation being executed, and whether the error is fatal or not.
+ */
+typedef struct error {
+    uint8_t code;
+    enum OperationType type;
+    uint8_t is_fatal;
+} error;
+
+error* e = NULL;
+
+
+
+// ======================
+// Stack Implementation
+// ======================
+
+/**
+ * @brief Simple stack implementation to hold the available thread indexes for multi-threaded execution.
+ * * This stack is used to hold the available thread indexes for multi-threaded execution.
+ * * It is used to keep track of which threads are currently executing and which are available for new accesses.
+ * * The stack is initialized with the number of threads to use at once, and
+ * * * the available thread indexes are pushed onto the stack.
+ * * When a thread is created to execute an access, it pops an index from the stack
+ * * * and uses it to execute the access. When the access is finished, the index is pushed back onto the stack to be used by another access.
+ * * The stack is implemented as a linked list, with each node containing a value and a pointer to the next node.
+ */
+typedef struct stack {
+    uint8_t value;
+    struct stack* next;
+} stack;
+
+stack* s = NULL;
+
+// ==================
+// Stack Prototypes
+// ==================
+
+void init_stack_with_thread_count (stack* s, uint8_t count);
+void clear_stack (stack* s);
+void push (stack* s, uint8_t value);
+uint8_t pop (stack* s);
+
+
+
+// =======================
+// Cache accesses buffer
+// =======================
 
 /**
  * @brief Private buffer holding the pending accesses to be executed on the next flush call.
@@ -24,8 +91,8 @@ typedef struct cache_accesses_buffer {
     uint8_t w_buffer_count;
     uint64_t** return_buffers;
     uint8_t return_buffers_count;
+    error* e;
 } cache_accesses_buffer;
-
 
 struct Definition {
     uint8_t thread_count;
@@ -34,49 +101,42 @@ struct Definition {
     cache_accesses_buffer* accesses_buffer;
 };
 
-enum operations {
-    WRITE,
-    READ
-};
-
-
-// ======================
-// Stack Implementation
-// ======================
-typedef struct stack {
-    uint8_t value;
-    struct stack* next;
-} stack;
-
-// Stack var
-stack* s = NULL;
-
-// ==================
-// Stack Prototypes
-// ==================
-void init_stack_with_thread_count (stack* s, uint8_t count);
-void clear_stack (stack* s);
-void push (stack* s, uint8_t value);
-uint8_t pop (stack* s);
-
 
 // =================
 // Args definition
 // =================
+
+/**
+ * @brief Struct holding the arguments for the write and read functions.
+ * * This struct is used to hold the arguments for the write and read functions,
+ * * such as the address to be accessed, the passkey for the cache library, and the index of the thread executing the access.
+ */
 typedef struct access_args {
     uint64_t address;
+    uint64_t* return_buffer;
     uint64_t passkey;
     uint8_t thread_idx;
+    uint8_t exit_code;      // Only for read
 } access_args;
+
+
 
 // ==============
 // Prototypes
 // ==============
 
+// Write
+
 static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count);
 static void flush_write(Definition *def);
 static void *write(void *arg);
 static uint8_t address_compatibility_check(const uint64_t address, const uint64_t *base_buffer, int base_buffer_count);
+
+// Read
+
+static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts);
+static void flush_read(Definition *def);
+static void* read (void *arg);
 
 
 
@@ -175,7 +235,7 @@ uint8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, cons
     }
 
     def ->accesses_buffer->return_buffers = (uint64_t**) return_buffers;
-    uint8_t read = fill_read_buffer(def, read_addresses, address_count, byte_counts);
+    int8_t read = fill_read_buffer(def, read_addresses, address_count, byte_counts);
     
     // Address incompatibility
     if (read == -1)
@@ -184,7 +244,7 @@ uint8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, cons
         multi_read_cache_t(def, read_addresses, address_count, byte_counts, return_buffers);
         println("Buffers flushed!");
     }
-    return read;
+    return (uint8_t) read;
 }
 
 uint8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count)
@@ -201,7 +261,7 @@ uint8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int 
     if (written != write_count)
     {
         // Triggers execution
-        flush_write(def);
+        flush(def);
         multi_write_cache_t(def, (write_buffers + (written - 1) * sizeof(uint64_t)), write_count - written);
     }
     return 0;
@@ -285,6 +345,11 @@ static void flush_write(Definition *def)
             args->thread_idx = idx;
             // Creates the thread to execute the write operation
             pthread_create(&thread_array[idx], NULL, write, args);
+            if (args->exit_code == 2)
+            {
+                println("Write operation failed due to cache error.");
+            }
+
         } 
         else
         {
@@ -292,15 +357,107 @@ static void flush_write(Definition *def)
             i--;
         }
     }
+    clear_stack(s);
 }
 
 static void *write(void *arg)
 {
     access_args *args = arg;
-    write_cache_t(args->address, args->passkey);
+    if (write_cache_t(args->address, args->passkey) == 2)
+    {
+        args->exit_code = 2;
+    };
     push(s, args->thread_idx);
-    free(args);
     return NULL;
+}
+
+
+
+static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts)
+{
+    uint8_t max = def->max_buffer_size;
+    uint64_t *base_read = def->accesses_buffer->read_buffer;
+    uint64_t read_current = def->accesses_buffer->r_buffer_count;
+    uint64_t *base_write = def->accesses_buffer->write_buffer;
+    uint64_t write_current = def->accesses_buffer->w_buffer_count;
+    uint8_t read = 0;
+
+    while (read_current + read <= max || read < address_count)
+    {
+        if (address_compatibility_check(read_addresses[read], base_read, read_current) != 0)
+        {
+            return read;
+        }
+        if (address_compatibility_check(read_addresses[read], base_write, write_current) != 0)
+        {
+            return read;
+        }
+        base_read[read_current + read] = read_addresses[read];
+        read++;
+    }
+
+    return read;
+}
+
+static void flush_read(Definition *def)
+{
+    if (def->accesses_buffer->return_buffers == NULL)
+    {
+        return;
+    }
+
+    uint8_t count = def->accesses_buffer->r_buffer_count;
+    // Multithreaded sync
+
+    // Thread count definition
+    // Note: Thread count is not limited to the number of threads available by the CPU for maximum compatibility with the cache library,
+    // but it is recommended to set it to the number of threads available by the CPU or below for optimal performance.
+    uint8_t thread_count = (count > def->thread_count)? def->thread_count : count;
+    init_stack_with_thread_count(s,thread_count);
+
+    pthread_t thread_array[thread_count];
+
+    
+    // writing loop
+    for (int i = 0; i < count; i++)
+    {
+        int8_t idx = pop(s);
+        if (idx != -1)
+        {
+            // Creates and populates the args struct
+            access_args *args = malloc(sizeof(*args));
+            args->address = def->accesses_buffer->read_buffer[i];
+            args->return_buffer = def->accesses_buffer->return_buffers[i];
+            args->passkey = def->passkey;
+            args->thread_idx = idx;
+            // Creates the thread to execute the read operation
+            pthread_create(&thread_array[idx], NULL, read, args);
+            if (args->exit_code == 1)
+            {
+                println("Read operation failed due to cache error.");
+            }
+        } 
+        else
+        {
+            // Keeps the loop on the same access
+            i--;
+        }
+    }
+    clear_stack(s);
+}
+
+static void* read (void *arg)
+{
+    access_args *args = arg;
+    uint64_t code = read_cache_t(args->address, args->passkey, 8, args->thread_idx);
+    if (code == 0)
+    {
+        push(s, args->thread_idx);
+        free(args);
+        return NULL;
+    }
+    args->exit_code = code;
+    push(s, args->thread_idx);
 }
 
 
