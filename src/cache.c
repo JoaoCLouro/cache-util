@@ -212,19 +212,26 @@ uint8_t multi_operation_compatible_t(const uint64_t address_1, const uint64_t ad
 static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count)
 {
     uint8_t max = def->max_buffer_size;
-    uint64_t *base = def->accesses_buffer->write_buffer;
-    uint64_t current = def->accesses_buffer->w_buffer_count;
+    uint64_t *base_write = def->accesses_buffer->write_buffer;
+    uint64_t write_current = def->accesses_buffer->w_buffer_count;
+    uint64_t *base_read = def->accesses_buffer->read_buffer;
+    uint64_t read_current = def->accesses_buffer->r_buffer_count;
     uint8_t written = 0;
 
-    while (current + written <= max || written < count)
+    while (write_current + written <= max || written < count)
     {
-        if (address_compatibility_check(write_buffer[written], base, current) != 0)
+        if (address_compatibility_check(write_buffer[written], base_write, write_current) != 0)
         {
             return written;
         }
-        base[current + written] = write_buffer[written];
+        if (address_compatibility_check(write_buffer[written], base_read, read_current) != 0)
+        {
+            return written;
+        }
+        base_write[write_current + written] = write_buffer[written];
         written++;
     }
+
     return written;
 }
 
