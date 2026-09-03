@@ -37,6 +37,45 @@ enum Error_Type {
 } Error_Type;
 
 // ============================================================================
+// Cache Result type (A rust Result<T, E> like type)
+// ============================================================================
+
+/**
+ * @brief Struct representing the result of a cache operation, similar to Rust's Result<T, E> type.
+ * * Contains either a successful outcome with operation details or an error with specific failure information.
+ * * This struct is designed to provide a clear and structured way to handle the results of cache operations, including both read and write actions.
+ * * The `is_ok` field indicates whether the operation was successful (1) or if an error occurred (0).
+ * * The `value` union holds the details of the successful operation or the error information, depending on the value of `is_ok`.
+ * @usage
+ * CacheResult result = multi_read_cache_t(def, read_addresses, address_count, byte_counts, return_buffers);
+ * if (result.is_ok) {
+ *     // Handle successful read operation
+ *     uint8_t completed = result.value.ok.operations_completed;
+ *     size_t bytes_read = result.value.ok.total_bytes;
+ * } else {
+ *     // Handle error
+ *     enum Error_Type error_code = result.value.err.code;
+ *     uint64_t failed_address = result.value.err.failed_address;
+ * }
+ */
+typedef struct CacheResult {
+    uint8_t is_ok;          // 0 if error, 1 if ok
+    union {
+        // if is_ok == 1
+        struct{
+            uint8_t operations_completed; // Number of cache accesses successfully queued/executed
+            size_t total_bytes;           // Total bytes read (0 for write operations)
+        } ok;
+        
+        // if is_ok == 0
+        struct {
+            enum Error_Type code;         // Specific error that occurred
+            uint64_t failed_address;      // Exact hardware address that triggered the failure
+        } err;
+    } value;
+} CacheResult;
+
+// ============================================================================
 // Core Functions Interface
 // ============================================================================
 
@@ -54,10 +93,10 @@ enum Error_Type {
      * @param address_count     Total size of the input pointer arrays (bounded by a uint8_t capacity).
      * @param byte_counts       Array containing execution read lengths matching each sequential lookup index.
      * @param return_buffers    Null terminated array of destination memory addresses receiving mapped data chunks.
-     * @return int8_t           Number of successful reads executed or 0 if the definition struct is null.
+     * @return CacheResult      Result of the read operations.
      * @warning The maximum number of threads must be set before calling this function, otherwise the default value of 1 will be used.
      */
-    int8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers);
+    CacheResult multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers);
 
     /**
      * @brief Executes batch-mode sequence allocations into the cache space.
@@ -65,11 +104,10 @@ enum Error_Type {
      * @param def               Pointer to the definition struct holding the configuration values for the cache library.
      * @param write_buffers     Array of pointers containing the block entries to be written.
      * @param write_count       Number of elements in the `write_buffer`
-     * @return int8_t           0 If all writes were compatible and executed successfully.
-     * @return int8_t           -1 If the definition struct is null.
+     * @return CacheResult       Result of the write operations.
      * @warning The maximum number of threads must be set before calling this function, otherwise the default value of 1 will be used.
      */
-    int8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count);
+    CacheResult multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count);
     
     /**
      * @brief Structural compatibility check to evaluate alignment invariants.

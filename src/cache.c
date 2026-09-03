@@ -28,7 +28,7 @@ typedef struct stack {
 
 /**
  * @brief Struct holding the error information for the cache library.
- * * Tracks the error code, the operation type that failed, and a stack of addresses that caused cache misses.
+ * * Tracks the error code, the operation type that failed, and a stack of addresses that caused failures.
  */
 typedef struct error {
     int8_t code;   
@@ -216,50 +216,99 @@ enum Error_Type flush (Definition* def)
 }
 
 /**
- * @brief Executes batch-mode sequence reads against multiple cache targets. Pushes to buffer and flushes if full or incompatible.
+ * @brief Executes batch-mode sequence reads against multiple cache targets returning a Result type.
  * @param def Pointer to the Definition configuration struct.
  * @param read_addresses Array of 64-bit hardware addresses to look up.
  * @param address_count Total number of lookups.
- * @param byte_counts Array containing execution read lengths matching each sequential lookup index.
- * @param return_buffers Null terminated array of destination memory addresses receiving mapped data chunks.
- * @return int8_t 0 on total success, -1 if a fatal execution error occurs.
+ * @param byte_counts Array containing execution read lengths.
+ * @param return_buffers Null terminated array of destination memory addresses.
+ * @return CacheResult Tagged union containing either total ops/bytes or error code and failing address.
  */
-int8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
+CacheResult multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
 {
-    if (def == NULL) return -1;
+    CacheResult result = { .is_ok = 1, .value.ok = {0, 0} };
+    
+    if (def == NULL) {
+        result.is_ok = 0;
+        result.value.err.code = IMPLEMENTATION_ERROR;
+        result.value.err.failed_address = 0;
+        return result;
+    }
 
     uint8_t read = fill_read_buffer(def, read_addresses, address_count, byte_counts, return_buffers);
     
+    size_t current_bytes = 0;
+    for (int i = 0; i < read; i++) {
+        current_bytes += byte_counts[i];
+    }
+    
     if (read != address_count)
     {
-        if (flush(def) == SUCCESS) {
-            multi_read_cache_t(def, read_addresses + read, address_count - read, byte_counts + read, return_buffers + read);
+        enum Error_Type flush_err = flush(def);
+        if (flush_err == SUCCESS) {
+            CacheResult next = multi_read_cache_t(def, read_addresses + read, address_count - read, byte_counts + read, return_buffers + read);
+            
+            if (next.is_ok) {
+                result.value.ok.operations_completed = read + next.value.ok.operations_completed;
+                result.value.ok.total_bytes = current_bytes + next.value.ok.total_bytes;
+            } else {
+                return next;
+            }
+            return result;
         } else {
-            return -1;
+            result.is_ok = 0;
+            result.value.err.code = flush_err;
+            result.value.err.failed_address = (uint64_t)pop(&(def->accesses_buffer->e->s), NULL);
+            return result;
         }
     }
-    return 0;
+    
+    result.value.ok.operations_completed = read;
+    result.value.ok.total_bytes = current_bytes;
+    return result;
 }
 
 /**
- * @brief Executes batch-mode sequence allocations into the cache space. Pushes to buffer and flushes if full or incompatible.
+ * @brief Executes batch-mode sequence allocations into the cache space returning a Result type.
  * @param def Pointer to the Definition configuration struct.
  * @param write_buffers Array of pointers containing the block entries to be written.
  * @param write_count Number of elements to write.
- * @return int8_t 0 on success, -1 if the definition struct is null.
+ * @return CacheResult Tagged union containing either total ops or error code and failing address.
  */
-int8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count)
+CacheResult multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count)
 {
-    if (def == NULL) return -1;
+    CacheResult result = { .is_ok = 1, .value.ok = {0, 0} };
+    
+    if (def == NULL) {
+        result.is_ok = 0;
+        result.value.err.code = IMPLEMENTATION_ERROR;
+        result.value.err.failed_address = 0;
+        return result;
+    }
     
     uint8_t written = fill_write_buffer(def, write_buffers, write_count);
 
     if (written != write_count)
     {
-        flush(def);
-        multi_write_cache_t(def, write_buffers + written, write_count - written);
+        enum Error_Type flush_err = flush(def);
+        if (flush_err == SUCCESS) {
+            CacheResult next = multi_write_cache_t(def, write_buffers + written, write_count - written);
+            if (next.is_ok) {
+                result.value.ok.operations_completed = written + next.value.ok.operations_completed;
+            } else {
+                return next; 
+            }
+            return result;
+        } else {
+            result.is_ok = 0;
+            result.value.err.code = flush_err;
+            result.value.err.failed_address = (uint64_t)pop(&(def->accesses_buffer->e->s), NULL);
+            return result;
+        }
     }
-    return 0;
+    
+    result.value.ok.operations_completed = written;
+    return result;
 }
 
 /**
@@ -329,6 +378,7 @@ static uint8_t flush_write(Definition *def)
 
     stack* local_stack = NULL;
     pthread_mutex_t local_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_t error_stack_mutex = PTHREAD_MUTEX_INITIALIZER;
     
     for (int i = thread_count - 1; i >= 0; i--) {
         push(&local_stack, &local_mutex, i);
@@ -347,6 +397,7 @@ static uint8_t flush_write(Definition *def)
                     def->accesses_buffer->e->code = thread_args[idx]->exit_code;
                     def->accesses_buffer->e->type = WRITE;
                     def->accesses_buffer->e->is_fatal = 1;
+                    push(&(def->accesses_buffer->e->s), &error_stack_mutex, thread_args[idx]->address);
                     error_occurred = 1;
                 }
                 free(thread_args[idx]);
@@ -383,6 +434,7 @@ static uint8_t flush_write(Definition *def)
                 def->accesses_buffer->e->code = thread_args[i]->exit_code;
                 def->accesses_buffer->e->type = WRITE;
                 def->accesses_buffer->e->is_fatal = 1;
+                push(&(def->accesses_buffer->e->s), &error_stack_mutex, thread_args[i]->address);
                 error_occurred = 1;
             }
             free(thread_args[i]);
@@ -484,9 +536,7 @@ static uint8_t flush_read(Definition *def)
                     def->accesses_buffer->e->code = thread_args[idx]->exit_code;
                     def->accesses_buffer->e->type = READ;
                     def->accesses_buffer->e->is_fatal = 1;
-                    if (thread_args[idx]->exit_code == 1) { 
-                        push(&(def->accesses_buffer->e->s), &error_stack_mutex, thread_args[idx]->address);
-                    }
+                    push(&(def->accesses_buffer->e->s), &error_stack_mutex, thread_args[idx]->address);
                     error_occurred = 1;
                 }
                 free(thread_args[idx]);
@@ -524,9 +574,7 @@ static uint8_t flush_read(Definition *def)
                 def->accesses_buffer->e->code = thread_args[i]->exit_code;
                 def->accesses_buffer->e->type = READ;
                 def->accesses_buffer->e->is_fatal = 1;
-                if (thread_args[i]->exit_code == 1) { 
-                    push(&(def->accesses_buffer->e->s), &error_stack_mutex, thread_args[i]->address);
-                }
+                push(&(def->accesses_buffer->e->s), &error_stack_mutex, thread_args[i]->address);
                 error_occurred = 1;
             }
             free(thread_args[i]);
