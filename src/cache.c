@@ -18,20 +18,24 @@ enum OperationType {
 
 
 
-// ==============
-// Error struct
-// ==============
+// =================
+// Args definition
+// =================
 
 /**
- * @brief Struct holding the error information for the cache library.
- * * This struct is used to hold the error information for the cache library,
- * * such as the error code, the type of operation being executed, and whether the error is fatal or not.
+ * @brief Struct holding the arguments for the write and read functions.
+ * * This struct is used to hold the arguments for the write and read functions,
+ * * such as the address to be accessed, the passkey for the cache library, and the index of the thread executing the access.
  */
-typedef struct error {
-    uint8_t code;
-    enum OperationType type;
-    uint8_t is_fatal;
-} error;
+typedef struct access_args {
+    uint64_t address;
+    uint64_t* return_buffer;
+    uint64_t passkey;
+    uint8_t thread_idx;
+    uint8_t exit_code;      // Only for read
+} access_args;
+
+access_args* args = NULL;
 
 
 
@@ -64,6 +68,30 @@ void init_stack_with_thread_count (stack* s, uint8_t count);
 void clear_stack (stack* s);
 void push (stack* s, uint8_t value);
 uint8_t pop (stack* s);
+
+
+
+// ==============
+// Error struct
+// ==============
+
+/**
+ * @brief Struct holding the error information for the cache library.
+ * * This struct is used to hold the error information for the cache library,
+ * * such as the error code, the type of operation being executed, and whether the error is fatal or not.
+ */
+typedef struct error {
+    // -1   -> No return buffer set
+    // 0    -> success,
+    // 1    -> cache miss,
+    // 2    -> invalid passkey,
+    // 3    -> implementation error (report)
+    int8_t code;   
+    enum OperationType type;
+    uint8_t is_fatal;
+    // Failed accesses addresses cache
+    stack* s;
+} error;
 
 
 
@@ -100,40 +128,24 @@ struct Definition {
 };
 
 
-// =================
-// Args definition
-// =================
-
-/**
- * @brief Struct holding the arguments for the write and read functions.
- * * This struct is used to hold the arguments for the write and read functions,
- * * such as the address to be accessed, the passkey for the cache library, and the index of the thread executing the access.
- */
-typedef struct access_args {
-    uint64_t address;
-    uint64_t* return_buffer;
-    uint64_t passkey;
-    uint8_t thread_idx;
-    uint8_t exit_code;      // Only for read
-} access_args;
-
-
-
 // ==============
 // Prototypes
 // ==============
 
+// Common
+
+static uint8_t address_compatibility_check(const uint64_t address, const uint64_t *base_buffer, int base_buffer_count);
+
 // Write
 
 static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count);
-static void flush_write(Definition *def);
+static uint8_t flush_write(Definition *def);
 static void *write(void *arg);
-static uint8_t address_compatibility_check(const uint64_t address, const uint64_t *base_buffer, int base_buffer_count);
 
 // Read
 
 static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts);
-static void flush_read(Definition *def);
+static uint8_t flush_read(Definition *def);
 static void* read (void *arg);
 
 
@@ -222,15 +234,16 @@ void flush (Definition* def)
     if (def == NULL){
         return;
     }
+    // Read return buffer must be set 
     flush_read(def);
     flush_write(def);
 }
 
-uint8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
+int8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
 {
     if (def == NULL) 
     {
-        return 0;
+        return -1;
     }
 
     def ->accesses_buffer->return_buffers = (uint64_t**) return_buffers;
@@ -246,7 +259,7 @@ uint8_t multi_read_cache_t(Definition* def, const uint64_t* read_addresses, cons
     return (uint8_t) read;
 }
 
-uint8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count)
+int8_t multi_write_cache_t(Definition* def, const uint64_t* write_buffers, int write_count)
 {
     if (def == NULL) 
     {
@@ -317,7 +330,7 @@ static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, 
  * @param def Pointer to the definition struct holding the configuration values for the cache library.
  * @warning The thread-count const defined on this file must be set to the number of threads the in use cpu has or bellow.
  */
-static void flush_write(Definition *def)
+static uint8_t flush_write(Definition *def)
 {
     uint8_t count = def->accesses_buffer->w_buffer_count;
     // Multithreaded sync
@@ -337,16 +350,33 @@ static void flush_write(Definition *def)
         int8_t idx = pop(s);
         if (idx != -1)
         {
-            // Creates and populates the args struct
-            access_args *args = malloc(sizeof(*args));
+            if (!args)
+            {
+                // Creates and populates the args struct
+                access_args *args = malloc(sizeof(*args));
+            }
             args->address = def->accesses_buffer->write_buffer[i];
             args->passkey = def->passkey;
             args->thread_idx = idx;
+            args->exit_code = 0;
             // Creates the thread to execute the write operation
             pthread_create(&thread_array[idx], NULL, write, args);
-            if (args->exit_code == 2)
+            if (args->exit_code != 0)
             {
-                println("Write operation failed due to cache error.");
+                switch (args->exit_code)
+                {
+                    // Invalid passkey
+                    case 2:
+                        def->accesses_buffer->e->code = 2;
+                        def->accesses_buffer->e->type = WRITE;
+                        def->accesses_buffer->e->is_fatal = 1;
+                        return 1;
+                    // Implementation error (3)
+                    default:
+                        println("Unreachable");
+                        return 1;
+                }
+                clean_args(args);
             }
 
         } 
@@ -357,17 +387,21 @@ static void flush_write(Definition *def)
         }
     }
     clear_stack(s);
+    return 0;
 }
 
 static void *write(void *arg)
 {
     access_args *args = arg;
-    if (write_cache_t(args->address, args->passkey) == 2)
+    uint64_t code = write_cache_t(args->address, args->passkey);
+    if (code == 0)
     {
-        args->exit_code = 2;
-    };
+        push(s, args->thread_idx);
+        clean_args(args);
+        return NULL;
+    }
+    args->exit_code = code;
     push(s, args->thread_idx);
-    return NULL;
 }
 
 
@@ -398,11 +432,14 @@ static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses
     return read;
 }
 
-static void flush_read(Definition *def)
+static uint8_t flush_read(Definition *def)
 {
     if (def->accesses_buffer->return_buffers == NULL)
     {
-        return;
+        def->accesses_buffer->e->code = -1;
+        def->accesses_buffer->e->type = READ;
+        def->accesses_buffer->e->is_fatal = 1;
+        return 1;
     }
 
     uint8_t count = def->accesses_buffer->r_buffer_count;
@@ -423,18 +460,46 @@ static void flush_read(Definition *def)
         int8_t idx = pop(s);
         if (idx != -1)
         {
-            // Creates and populates the args struct
-            access_args *args = malloc(sizeof(*args));
+            if (!args)
+            {
+                // Creates and populates the args struct
+                access_args *args = malloc(sizeof(*args));
+            }
+            
             args->address = def->accesses_buffer->read_buffer[i];
             args->return_buffer = def->accesses_buffer->return_buffers[i];
             args->passkey = def->passkey;
             args->thread_idx = idx;
+            args->exit_code = 0;
             // Creates the thread to execute the read operation
             pthread_create(&thread_array[idx], NULL, read, args);
-            if (args->exit_code == 1)
+            if (args->exit_code != 0)
             {
-                println("Read operation failed due to cache error.");
+                switch (args->exit_code)
+                {
+                    // Cache miss
+                    case 1:
+                        def->accesses_buffer->e->code = 1;
+                        def->accesses_buffer->e->type = READ;
+                        def->accesses_buffer->e->is_fatal = 1;
+                        push(def->accesses_buffer->e->s, args->address);
+                        return 1;
+                    // Invalid passkey
+                    case 2:
+                        def->accesses_buffer->e->code = 2;
+                        def->accesses_buffer->e->type = READ;
+                        def->accesses_buffer->e->is_fatal = 1;
+                        return 1;
+                    // Implementation error (3)
+                    default:
+                        def->accesses_buffer->e->code = 3;
+                        def->accesses_buffer->e->type = READ;
+                        def->accesses_buffer->e->is_fatal = 1;
+                        return 1;
+                }
+                clean_args(args);
             }
+            
         } 
         else
         {
@@ -443,6 +508,7 @@ static void flush_read(Definition *def)
         }
     }
     clear_stack(s);
+    return 0;
 }
 
 static void* read (void *arg)
@@ -452,7 +518,7 @@ static void* read (void *arg)
     if (code == 0)
     {
         push(s, args->thread_idx);
-        free(args);
+        clean_args(args);
         return NULL;
     }
     args->exit_code = code;
@@ -542,3 +608,20 @@ uint8_t pop (stack* s)
     return tmp;
 }
 
+// ==============
+// Args Helpers
+// ==============
+
+/**
+ * @brief Cleans the args struct to avoid garbage values
+ * @param args Pointer to the access_args struct
+ * @warning Cleans the args struct to avoid garbage values
+ */
+static void clean_args(access_args* args)
+{
+    args->address = 0;
+    args->return_buffer = NULL;
+    args->passkey = 0;
+    args->thread_idx = 0;
+    args->exit_code = 0;
+}
