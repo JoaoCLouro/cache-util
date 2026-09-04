@@ -152,6 +152,12 @@ int8_t set_max_wait_size (Definition* def, const uint8_t size)
     if (def == NULL) return 0;
     if (size == 0 || size > 128) return -1;
     def->max_buffer_size = size;
+    
+    // Reallocate internal buffers to prevent heap overflows during batch execution
+    def->accesses_buffer->read_buffer = realloc(def->accesses_buffer->read_buffer, size * sizeof(uint64_t));
+    def->accesses_buffer->write_buffer = realloc(def->accesses_buffer->write_buffer, size * sizeof(uint64_t));
+    def->accesses_buffer->return_buffers = realloc(def->accesses_buffer->return_buffers, size * sizeof(uint64_t*));
+    
     return 1;
 }
 

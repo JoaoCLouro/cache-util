@@ -47,6 +47,10 @@ uint64_t init_t (void);
  * @param address       The 64-bit target address to query inside the cache (RDI).
  * @param return_buffer Pointer to the C destination buffer where data will be copied (RSI).
  * @param bytes_to_read The number of bytes to read out of the cache cell (RDX).
+ *                      Clamped internally to CACHE_CELL_SIZE (16 bytes): a cell only
+ *                      holds that many bytes, and any request beyond it is silently
+ *                      truncated rather than spilling into a neighboring cell's
+ *                      unrelated cached data.
  * @param passkey       The key returned by init() to authorize cache access (RCX).
  * * @return uint64_t Exit status code (RAX):
  * 0 - Success
@@ -55,7 +59,7 @@ uint64_t init_t (void);
  * 3 - Cell index miscalculation error
  */
 uint64_t read_cache_t (const uint64_t address, 
-                       const void *return_buffer, 
+                       void *return_buffer, 
                        const size_t bytes_to_read, 
                        const uint64_t passkey);
 

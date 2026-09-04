@@ -1,12 +1,12 @@
 # ============================================================================
-# Makefile for Cache Library & Test Suite (NASM & GCC/LD)
+# Makefile for Cache Library, Test Suite & Benchmarks (NASM & GCC/LD)
 # ============================================================================
 
-CC      = gcc
-NASM    = nasm
-CFLAGS  = -Wall -Wextra -std=c99 -g -Iinclude
+CC        = gcc
+NASM      = nasm
+CFLAGS    = -Wall -Wextra -std=c99 -g -Iinclude
 NASMFLAGS = -f elf64 -g
-LDFLAGS = -lpthread -no-pie
+LDFLAGS   = -lpthread -no-pie
 
 # Directories
 SRC_DIR   = src
@@ -18,6 +18,7 @@ TEST_DIR  = tests
 # Targets
 TEST_CACHE        = $(BIN_DIR)/test_cache
 TEST_DIRECT_CACHE = $(BIN_DIR)/test_direct_cache
+BENCHMARK_TARGET  = $(BIN_DIR)/benchmark_cache
 
 # Source & Object Files (.asm for assembly, .c for C sources)
 C_SRCS    = $(wildcard $(SRC_DIR)/*.c)
@@ -31,7 +32,7 @@ LIB_OBJS  = $(C_OBJS) $(ASM_OBJS)
 all: dirs
 	@echo "Detected C Sources: $(C_SRCS)"
 	@echo "Detected ASM Sources: $(ASM_SRCS)"
-	@$(MAKE) --no-print-directory $(TEST_CACHE) $(TEST_DIRECT_CACHE)
+	@$(MAKE) --no-print-directory $(TEST_CACHE) $(TEST_DIRECT_CACHE) $(BENCHMARK_TARGET)
 
 # Create necessary directories
 dirs:
@@ -54,15 +55,22 @@ $(TEST_CACHE): $(BUILD_DIR)/test_cache.o $(LIB_OBJS)
 $(TEST_DIRECT_CACHE): $(BUILD_DIR)/test_direct_cache.o $(LIB_OBJS)
 	$(CC) $^ -o $@ $(LDFLAGS)
 
-# Compile test files separately to avoid multiple definitions of main
+# Build benchmark executable
+$(BENCHMARK_TARGET): $(BUILD_DIR)/benchmark_cache.o $(LIB_OBJS)
+	$(CC) $^ -o $@ $(LDFLAGS)
+
+# Compile test and benchmark files separately to avoid multiple definitions of main
 $(BUILD_DIR)/test_cache.o: $(TEST_DIR)/test_cache.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/test_direct_cache.o: $(TEST_DIR)/test_direct_cache.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/benchmark_cache.o: $(TEST_DIR)/benchmark_cache.c | dirs
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Phony targets
-.PHONY: all clean test valgrind
+.PHONY: all clean test benchmark valgrind
 
 # Run both test suites
 test: all
@@ -70,6 +78,11 @@ test: all
 	./$(TEST_CACHE)
 	@echo "=== Running Direct Cache Test Suite ==="
 	./$(TEST_DIRECT_CACHE)
+
+# Run the benchmark performance analyzer
+benchmark: all
+	@echo "=== Running Cache Benchmark Analyzer ==="
+	./$(BENCHMARK_TARGET)
 
 # Clean up build artifacts and binaries
 clean:

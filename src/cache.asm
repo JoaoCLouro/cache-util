@@ -1,6 +1,9 @@
 ; Standard used
 default rel
 
+section .note.GNU-stack noalloc noexec nowrite progbits
+section .text
+
 ; -- | Functions Provided | --
 global init
 global read_cache
@@ -64,11 +67,11 @@ section .data
 validation_address: dq 0    ; Passkey to the cache
 
 section .bss
-align CACHE_BLOCK_SIZE
+alignb CACHE_BLOCK_SIZE
 cache_validity:   resb CACHE_LINES                          ; 2 bits for each cache cell (1 byte total by block)
-align CACHE_BLOCK_SIZE
+alignb CACHE_BLOCK_SIZE
 cache_tags:       resq (CACHE_WAYS * CACHE_LINES)           ; reserves 8 bytes for each tag (could be optimized) 
-align CACHE_BLOCK_SIZE
+alignb CACHE_BLOCK_SIZE
 cache_buffer:     resb CACHE_SIZE                                           
 
 section .text
@@ -112,10 +115,21 @@ section .text
 ; -----------------------------------------------------
     read_cache:        
         ; Passkey validation
-        cmp rcx, validation_address
+        cmp rcx, qword [validation_address]
         jne _invalid_passkey
         
-        ; Valid passkey detected!      
+        ; Valid passkey detected!
+        ; Preserve the caller's arguments across the helper calls below, which clobber
+        ; RDI/RSI/RDX freely. Also save R12 and RBX (both callee-saved per the SysV AMD64
+        ; ABI) since we use them as scratch registers for the matched cell number and the
+        ; cache index respectively - without this, returning to a caller that keeps a live
+        ; value in R12/RBX across this call corrupts that value.
+        push rdi        ; [address]
+        push rsi        ; [address, return_buffer]
+        push rdx        ; [address, return_buffer, bytes_to_read]
+        push r12        ; [address, return_buffer, bytes_to_read, saved_r12]
+        push rbx        ; [address, return_buffer, bytes_to_read, saved_r12, saved_rbx]
+
         ; Gets the index bits of the address
         call _get_index_bits
         mov rbx, rax                    ; RBX holds the index bits
@@ -123,69 +137,75 @@ section .text
         ; Validates the existence of the data in cache
         mov cl, [cache_validity + rbx]
         and cl, 0x0f
-        test cl, 0
+        test cl, cl
         ; Not present
-        je _not_present
+        je _not_present_cleanup
         
         _read:
             ; Determine presence cell
             
             ; Gets the tag bits of the address
-            call _get_tag_bits          ; r8 holds the tag bits
-            mov r8, rax
-            
-            push rdi
-            push rsi
+            mov rdi, [rsp + 32]     ; original address
+            call _get_tag_bits
+            mov r8, rax             ; R8 holds the tag bits
             
             mov rdi, rbx        ; RDI holds the index bits
             mov rsi, r8         ; RSI holds the tag bits
-            call _tag_exists_in_cache
+            call _tag_exists_in_cache   ; RAX holds the cell number (1-4) or 0
 
             cmp rax, 0
-            je _not_present
+            je _not_present_cleanup
            
         _return_data:
-            ; Preserve the cache cell number matched
-            push rax
-            ; Gets the offset bits of the address
-            call _get_offset_bits
-            mov r8, rax
-            pop rax
-            ; Moves the address of the value in cache to the return buffer address
-            
-            ; Address simplification 
-            push rax
-            imul rax, CACHE_CELL_SIZE
-            add r8, rax
+            mov r12, rax                ; R12 holds the matched cell number (1-4)
+
+            ; Address simplification: final displacement = (cell-1)*CELL_SIZE + index*BLOCK_SIZE
+            ; NOTE: deliberately does NOT add the address's offset bits. write_cache always
+            ; stores a value starting at the beginning of the matched cell (see its own
+            ; displacement math, which never adds an offset either) - so read_cache must look
+            ; for it in that same place, not at (block_start + offset), or it reads whatever
+            ; unrelated bytes happen to sit at that unrelated position in the block.
+            mov r8, r12
+            dec r8                      ; cells are 1-based; convert to 0-based
+            imul r8, CACHE_CELL_SIZE
             
             mov rax, rbx
             imul rax, CACHE_BLOCK_SIZE
             add r8, rax
-            pop rax
             ; Final address displacement is all in r8
-            mov rcx, [cache_buffer + r8]
-            
-            pop rdi           ; RDI holds the return address
-            mov rsi, rcx      ; RSI holds the read address
-            push rax
+
+            mov rdx, [rsp + 16]         ; rdx = bytes_to_read
+            ; Clamp to CACHE_CELL_SIZE: a cell only holds this many bytes, and copying more
+            ; would read into the neighboring cell's data - which belongs to a different,
+            ; unrelated cached address, not extra bytes of this one. Silently returning
+            ; that would be wrong data, not just "more" data, so cap it instead.
+            cmp rdx, CACHE_CELL_SIZE
+            jbe _bytes_ok
+            mov rdx, CACHE_CELL_SIZE
+            _bytes_ok:
+            mov rdi, [rsp + 24]         ; rdi = return_buffer (caller's destination)
+            lea rsi, [cache_buffer + r8]; rsi = address OF the cached data (source)
             call _write_to_address
-            pop rax
             
         _loop_end:
-            ; Updates cell decision tree      
-            push rdi    
-            mov rdi, [cache_validity + rbx * 8]     ; RDI holds the block's validity buffer address
-            mov rsi, rax                            ; RSI holds the latest accessed cell 
+            ; Updates cell decision tree
+            lea rdi, [cache_validity + rbx]   ; RDI holds the block's validity buffer address
+            mov rsi, r12                      ; RSI holds the latest accessed cell (1-4)
             call _update_cells
-            test rax, 0
-            jne _cell_index_error
-            pop rsi
-            pop rdi
-                
+            test rax, rax
+            jne _cell_index_error_cleanup
+
+            pop rbx           ; [address, return_buffer, bytes_to_read, saved_r12] ; restore caller's RBX
+            pop r12           ; [address, return_buffer, bytes_to_read] ; restore caller's R12
+            add rsp, 24       ; [] ; discard saved args, stack balanced
             ; Successful exit routine: moves the success exit code to rax
             xor RAX, RAX
             ret
             
+        _not_present_cleanup:
+            pop rbx           ; restore caller's RBX
+            pop r12           ; restore caller's R12
+            add rsp, 24       ; discard the 3 saved args, stack balanced
         _not_present: 
             ; Error routine
             ; Address is not in the cache
@@ -196,6 +216,10 @@ section .text
             mov rax, 2
             ret
             
+        _cell_index_error_cleanup:
+            pop rbx           ; restore caller's RBX
+            pop r12           ; restore caller's R12
+            add rsp, 24       ; discard the 3 saved args, stack balanced
         _cell_index_error:
             ; writes the error msg to the std err
             mov rax, 1
@@ -227,10 +251,16 @@ section .text
 ; -----------------------------------------------------
     write_cache:     
         ; Passkey validation
-        cmp rsi, validation_address
+        cmp rsi, qword [validation_address]
         jne _invalid_passkey
         
         ; Valid passkey detected!
+        ; Preserve the caller's source-data address (RDI) across the helper calls below,
+        ; which clobber RDI/RSI freely. This is the actual data write_cache must copy INTO
+        ; the cache - it must not be lost. Also save RBX (callee-saved per the SysV AMD64
+        ; ABI) since we use it as scratch storage for the cache index.
+        push rdi                ; [source_data_addr]
+        push rbx                ; [source_data_addr, saved_rbx]
         
         _determine_address_existence_in_cache:
             ; Determines if the address is already in cache
@@ -238,50 +268,58 @@ section .text
             call _get_index_bits
             mov rbx, rax                        ; RBX holds the index position
             
-            mov rcx, [cache_validity + rbx * 8] ; RCX holds the blocks validity address
+            lea rcx, [cache_validity + rbx]     ; RCX holds the block's validity byte address
             
+            mov rdi, [rsp + 8]                    ; original source_data_addr is also the "address" key
             call _get_tag_bits
-            mov rsi, rax                        ; RSI holds the tag bits
+            mov r9, rax                          ; R9 holds the tag bits (kept out of RSI so it survives)
             
+            mov rdi, [rsp + 8]
             call _get_offset_bits
             mov r8, rax                     ; R8 holds the offset bits
             
             ; Verifies if the tag is already written in the cache at the correct line
             ; If so, the address was already written into the cache
             
-            push rdi
             mov rdi, rbx                        ; RDI holds the index bits
-            call _tag_exists_in_cache           ; RAX holds the cell number or 0
+            mov rsi, r9                          ; RSI holds the tag bits
+            call _tag_exists_in_cache           ; RAX holds the cell number (1-4) or 0
             cmp rax, 0
             ; 0 - not in cache
             je _decide_and_write
+
+            push rax                    ; [source_data_addr, saved_rbx, cell] ; already-cached hit path
             
         _write_and_update:
-            ; If enters, the address was already in the cache
+            ; Entered with RAX = 1-based cell number and stack = [source_data_addr, saved_rbx, cell]
+            mov rax, [rsp]
             
             ; Rewrites data in cache (might be updated data)
             
-            ; Address simplification
-            push rax
+            ; Address simplification: displacement = (cell-1)*CELL_SIZE + index*BLOCK_SIZE
+            dec rax                     ; convert 1-based cell to 0-based
             imul rax, CACHE_CELL_SIZE
             mov rdx, rax
             
             mov rax, rbx
             imul rax, CACHE_BLOCK_SIZE
-            add rdx, rax            
-            pop rax
+            add rdx, rax
             ; Final address displacement is all in rdx
-            mov rsi, [cache_buffer + rdx]  
-            pop rdi 
-            xchg rsi, rdi               ; RDI holds the write address && RSI holds the address to read from 
+
+            mov rdi, [rsp + 16]          ; rdi = source_data_addr (what the caller wants written)
+            lea rsi, [cache_buffer + rdx] ; rsi = destination slot in the cache... 
+            xchg rdi, rsi                ; ...but _write_to_address wants RDI=dest, RSI=src, so swap
             mov rdx, CACHE_BLOCK_SIZE   ; RDX holds the number of bytes to write
             call _write_to_address
             ; Updates the decision tree
-            mov rdi, rcx                                                                    ; RDI holds the block validity address
-            mov rsi, rax                                                                    ; RSI holds the cache cell number 
-            call _update_cells  
+            mov rdi, rcx                ; RDI holds the block validity address
+            mov rsi, [rsp]                ; RSI holds the cache cell number (1-based)
+            call _update_cells
                 
         _exit:
+            pop rax           ; [source_data_addr, saved_rbx] ; discard cell number
+            pop rbx           ; [source_data_addr] ; restore caller's RBX
+            add rsp, 8        ; [] ; discard source_data_addr
             ; Exit routine
             xor RAX, RAX
             ret
@@ -295,10 +333,12 @@ section .text
             je _decide_cell_overwrite
             
             _write_cell:
-                ; Cleaning tag entry
-                
-                ; Address simplification
-                push rax
+                ; RAX holds the 1-based cell number to use. Stash it on the stack so
+                ; _write_and_update / _update_cells can find it after RAX gets reused below.
+                push rax                     ; [source_data_addr, saved_rbx, cell]
+
+                ; Tag slot address = cache_tags + index*8*CACHE_WAYS + (cell-1)*8
+                dec rax                      ; 0-based cell
                 imul rax, 8
                 mov rdi, rax
                 
@@ -307,19 +347,22 @@ section .text
                 imul rax, CACHE_WAYS
                 
                 add rax, rdi
-                ; Final address displacement is all in rax                
+                ; Final tag slot displacement is all in rax
                 mov rdi, [cache_tags + rax]
+                push rax                     ; [source_data_addr, saved_rbx, cell, tag_slot_offset]
                 mov rax, TAG_ENTRY_CLEANING_MASK
                 and rdi, rax
                 ; Writing new tag entry
-                or rdi, rsi
-                ; writing the data into the buffer and updating the validity buffer
-                pop rax
+                or rdi, r9                   ; r9 still holds this address's tag bits
+                pop rax                      ; [source_data_addr, saved_rbx, cell] ; rax = tag_slot_offset
+                mov [cache_tags + rax], rdi  ; actually persist the tag - without this the
+                                             ; cache can never report a hit for this address again
+                
                 jmp _write_and_update
             
             _decide_cell_overwrite:
             ; If not decide what cell to rewrite and rewrite it
-            call _decide_cell   ; RAX holds the cell to update
+            call _decide_cell   ; RAX holds the cell to update (1-based)
             jmp _write_cell
             
 
@@ -434,14 +477,17 @@ section .text
         ; binary cell index to zero out conversion to index format
         push rdi
         mov rdi, rsi
-        call _bin_to_index
-        pop rdi
+        call _bin_to_index      ; rax = 1 << (cell-1), sets the validity bit for this cell
+        pop rdi                 ; rdi = validity byte address (restored)
         
-        ; activates the given cell usage
-        or rdi, rax
+        ; activates the given cell usage - OR the bit into the BYTE VALUE and write it back,
+        ; not into the address itself
+        mov cl, [rdi]
+        or cl, al
+        mov [rdi], cl
         
-        ; advances the address to the decision tree
-        add rdi, 4
+        ; RDI must still point at the same validity/decision byte for _decision_logic - the
+        ; decision-tree bits live in the same byte as the validity bits (see _decision_logic).
         call _decision_logic
         xor RAX, RAX
         ret
@@ -494,7 +540,11 @@ section .text
       
         _update_1or2_cell:
             ; standard cell 1 or 2 logic
-            mov al, 11111001b
+            ; NOTE: shifted up by 4 bits from the original 0/1/2 bit positions, which
+            ; overlapped the validity nibble (bits 0-3) sharing this same byte and were
+            ; being clobbered by every access. Decision-tree state now lives entirely in
+            ; bits 4-6, validity stays in bits 0-3, and the two no longer collide.
+            mov al, 10011111b   ; clears bits 5,6 (was 11111001b clearing bits 1,2)
             and [rdi], al
             ; Verifies the need for cell 2 logic            
             cmp rsi,2
@@ -503,13 +553,13 @@ section .text
             ret
         
         _update_2cell:
-            mov al, 00000010b
+            mov al, 00100000b   ; sets bit 5 (was 00000010b setting bit 1)
             or [rdi], al
             ret
        
         _update_3or4cell:
             ; standard cell 3 or 4 logic
-            mov al, 00000101b
+            mov al, 01010000b   ; sets bits 4,6 (was 00000101b setting bits 0,2)
             or [rdi], al
             ; Verifies the need for cell 3 logic            
             cmp rsi,3
@@ -518,7 +568,7 @@ section .text
             ret
             
         _update_3cell:
-            mov al, 11111110b
+            mov al, 11101111b   ; clears bit 4 (was 11111110b clearing bit 0)
             and [rdi], al
             ret
 
@@ -591,6 +641,7 @@ section .text
                 inc rax
                 jmp _writing_loop
         _writing_loop_end:
+            pop rcx
             ret
 
 ; ------------------------------------------------------
@@ -608,6 +659,7 @@ section .text
     _any_cell_empty:
         push RDI
         push RSI
+        movzx rdi, byte [rdi]  ; RDI now holds the validity byte VALUE, not its address
         xor RSI, RSI ; Helper for bitwise comparison 
         xor RAX, RAX ; Cell number identifier (0-3)
         
@@ -645,6 +697,16 @@ section .text
 ;       (if the cache ways are ever changed needs
 ;       new implementation)
 ;
+;       NOTE: reads the SAME byte and SAME bit positions that
+;       _decision_logic writes (bit 6 = top node, bit 5 = which
+;       of cells 1/2 was last used, bit 4 = which of cells 3/4
+;       was last used - shifted up from bits 2/1/0 so this never
+;       overlaps the validity nibble in bits 0-3 of the same byte).
+;       Kept in the "read what was just marked used" polarity to
+;       match _decision_logic's own encoding - if you intended
+;       pseudo-LRU eviction (i.e. evict the side NOT recently
+;       used), invert each `je` below to `jne`.
+;
 ; Inputs:
 ;       RDI: Address to the blocks validity buffer byte
 ;
@@ -654,17 +716,17 @@ section .text
     _decide_cell:
         push RDI
         push RSI
-        shr rdi, 4  ; RDI holds the decision tree base
+        movzx rdi, byte [rdi]  ; RDI now holds the validity/decision byte VALUE, not its address
         
         _top_node:
             mov rsi, rdi
-            and rsi, 100b
+            and rsi, 1000000b   ; bit 6 (was bit 2)
             cmp rsi, 0
             je _1or2_cell
             
         _3or4_cell:
             mov rsi, rdi
-            and rsi, 1b
+            and rsi, 10000b     ; bit 4 (was bit 0)
             cmp rsi, 0
             je _3_cell
             
@@ -677,7 +739,7 @@ section .text
 
         _1or2_cell:
             mov rsi, rdi
-            and rsi, 10b
+            and rsi, 100000b   ; bit 5 (was bit 1)
             cmp rsi, 0
             je _1_cell
             
