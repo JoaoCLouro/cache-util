@@ -43,6 +43,7 @@ typedef struct error {
  */
 typedef struct cache_accesses_buffer {
     uint64_t* read_buffer;
+    size_t* read_byte_counts;  // Parallel array to read_buffer: how many bytes each queued read wants
     uint8_t r_buffer_count;
     uint64_t* write_buffer;
     uint8_t w_buffer_count;
@@ -68,6 +69,7 @@ struct Definition {
 typedef struct access_args {
     uint64_t address;
     uint64_t* return_buffer;
+    size_t bytes_to_read;   // Only meaningful for reads; how many bytes read_cache_t should copy out
     uint64_t passkey;
     uint8_t thread_idx;
     uint8_t exit_code;
@@ -84,7 +86,7 @@ static uint8_t address_compatibility_check(const uint64_t address, const uint64_
 static uint8_t fill_write_buffer(Definition *def, const uint64_t *write_buffer, int count);
 static uint8_t flush_write(Definition *def);
 static void *write_thread_func(void *arg);
-static uint8_t fill_read_buffer(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const void** return_buffers);
+static uint8_t fill_read_buffer(Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers);
 static uint8_t flush_read(Definition *def);
 static void* read_thread_func(void *arg);
 void push(stack** s, pthread_mutex_t* mutex, uint64_t value);
@@ -109,11 +111,26 @@ Definition* m_init_t (const uint64_t passkey)
     
     def->accesses_buffer = calloc(1, sizeof(cache_accesses_buffer));
     def->accesses_buffer->read_buffer = calloc(def->max_buffer_size, sizeof(uint64_t));
+    def->accesses_buffer->read_byte_counts = calloc(def->max_buffer_size, sizeof(size_t));
     def->accesses_buffer->write_buffer = calloc(def->max_buffer_size, sizeof(uint64_t));
     def->accesses_buffer->return_buffers = calloc(def->max_buffer_size, sizeof(uint64_t*));
     def->accesses_buffer->e = calloc(1, sizeof(error));
     
     return def;
+}
+
+void m_free_t (Definition* def)
+{
+    if (def == NULL) return;
+    
+    clean(def);
+    free(def->accesses_buffer->read_buffer);
+    free(def->accesses_buffer->read_byte_counts);
+    free(def->accesses_buffer->write_buffer);
+    free(def->accesses_buffer->return_buffers);
+    free(def->accesses_buffer->e);
+    free(def->accesses_buffer);
+    free(def);
 }
 
 /**
@@ -155,6 +172,7 @@ int8_t set_max_wait_size (Definition* def, const uint8_t size)
     
     // Reallocate internal buffers to prevent heap overflows during batch execution
     def->accesses_buffer->read_buffer = realloc(def->accesses_buffer->read_buffer, size * sizeof(uint64_t));
+    def->accesses_buffer->read_byte_counts = realloc(def->accesses_buffer->read_byte_counts, size * sizeof(size_t));
     def->accesses_buffer->write_buffer = realloc(def->accesses_buffer->write_buffer, size * sizeof(uint64_t));
     def->accesses_buffer->return_buffers = realloc(def->accesses_buffer->return_buffers, size * sizeof(uint64_t*));
     
@@ -186,13 +204,22 @@ void clean (Definition* def)
     if (def == NULL) return;
     
     free(def->accesses_buffer->read_buffer);
+    free(def->accesses_buffer->read_byte_counts);
     free(def->accesses_buffer->write_buffer);
     free(def->accesses_buffer->return_buffers);
-    free(def->accesses_buffer->e);
+    if (def->accesses_buffer->e != NULL)
+    {
+        // The error struct's failed-address stack is heap-allocated separately and was
+        // previously never freed here, leaking one node per address in the last flush's
+        // failure list every time clean() was called after an error.
+        while (pop(&(def->accesses_buffer->e->s), NULL) != -1);
+        free(def->accesses_buffer->e);
+    }
     free(def->accesses_buffer);
     
     def->accesses_buffer = calloc(1, sizeof(cache_accesses_buffer));
     def->accesses_buffer->read_buffer = calloc(def->max_buffer_size, sizeof(uint64_t));
+    def->accesses_buffer->read_byte_counts = calloc(def->max_buffer_size, sizeof(size_t));
     def->accesses_buffer->write_buffer = calloc(def->max_buffer_size, sizeof(uint64_t));
     def->accesses_buffer->return_buffers = calloc(def->max_buffer_size, sizeof(uint64_t*));
     def->accesses_buffer->e = calloc(1, sizeof(error));
@@ -241,7 +268,7 @@ CacheResult multi_read_cache_t(Definition* def, const uint64_t* read_addresses, 
         return result;
     }
 
-    uint8_t read = fill_read_buffer(def, read_addresses, address_count, return_buffers);
+    uint8_t read = fill_read_buffer(def, read_addresses, address_count, byte_counts, return_buffers);
     
     size_t current_bytes = 0;
     for (int i = 0; i < read; i++) {
@@ -328,7 +355,13 @@ uint8_t multi_operation_compatible_t(const uint64_t address_1, const uint64_t ad
     uint64_t index_mask = (1ULL << CACHE_INDEX_BITS) - 1;
     uint64_t ad1 = (address_1 >> CACHE_OFFSET_BITS) & index_mask;
     uint64_t ad2 = (address_2 >> CACHE_OFFSET_BITS) & index_mask;
-    return (ad1 != ad2) ? 1 : 0;
+    // Per the documented contract (cache.h): returns 1 when both addresses map to the
+    // SAME cache set index (i.e. they collide / are NOT safe to queue together), 0
+    // otherwise. This was previously inverted (returned 1 for *different* indices),
+    // which silently worked only because address_compatibility_check compensated with
+    // a matching inversion of its own - any direct caller of this public function got
+    // the opposite of what the header promised.
+    return (ad1 == ad2) ? 1 : 0;
 }
 
 
@@ -412,6 +445,13 @@ static uint8_t flush_write(Definition *def)
 
             if (error_occurred) {
                 push(&local_stack, &local_mutex, idx);
+                // Every write from here to the end of the batch was never dispatched at
+                // all (dispatch stopped after the first fatal error) - without recording
+                // them, they'd simply vanish once w_buffer_count is reset below, with no
+                // way for the caller to know they never ran.
+                for (int j = i; j < count; j++) {
+                    push(&(def->accesses_buffer->e->s), &error_stack_mutex, def->accesses_buffer->write_buffer[j]);
+                }
                 break;
             }
 
@@ -478,7 +518,7 @@ static void *write_thread_func(void *arg)
  * @param return_buffers Array of destination memory addresses for output data.
  * @return uint8_t Number of reads successfully queued before hitting capacity or conflict.
  */
-static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const void** return_buffers)
+static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses, const uint8_t address_count, const size_t* byte_counts, const void** return_buffers)
 {
     uint8_t max = def->max_buffer_size;
     uint64_t *base_read = def->accesses_buffer->read_buffer;
@@ -495,6 +535,7 @@ static uint8_t fill_read_buffer (Definition* def, const uint64_t* read_addresses
             return read;
         }
         base_read[read_current + read] = read_addresses[read];
+        def->accesses_buffer->read_byte_counts[read_current + read] = byte_counts[read];
         def->accesses_buffer->return_buffers[read_current + read] = (uint64_t*)return_buffers[read]; 
         read++;
     }
@@ -550,12 +591,19 @@ static uint8_t flush_read(Definition *def)
             
             if (error_occurred) {
                 push(&local_stack, &local_mutex, idx);
+                // Every read from here to the end of the batch was never dispatched at
+                // all (dispatch stopped after the first fatal error) - record them so
+                // they aren't silently lost once r_buffer_count is reset below.
+                for (int j = i; j < count; j++) {
+                    push(&(def->accesses_buffer->e->s), &error_stack_mutex, def->accesses_buffer->read_buffer[j]);
+                }
                 break;
             }
 
             access_args *t_args = calloc(1, sizeof(access_args));
             t_args->address = def->accesses_buffer->read_buffer[i];
             t_args->return_buffer = def->accesses_buffer->return_buffers[i];
+            t_args->bytes_to_read = def->accesses_buffer->read_byte_counts[i];
             t_args->passkey = def->passkey;
             t_args->thread_idx = (uint8_t)idx;
             t_args->local_stack = &local_stack;
@@ -603,7 +651,7 @@ static uint8_t flush_read(Definition *def)
 static void* read_thread_func(void *arg)
 {
     access_args *args = (access_args *)arg;
-    uint64_t code = read_cache_t(args->address, args->return_buffer, 8, args->passkey);
+    uint64_t code = read_cache_t(args->address, args->return_buffer, args->bytes_to_read, args->passkey);
     args->exit_code = code;
     
     push(args->local_stack, args->stack_mutex, args->thread_idx);
@@ -622,7 +670,7 @@ static uint8_t address_compatibility_check(const uint64_t address, const uint64_
     for (int i = 0; i < base_buffer_count; i++)
     {
         const uint64_t base_address = base_buffer[i];
-        if (multi_operation_compatible_t(address, base_address) == 0)
+        if (multi_operation_compatible_t(address, base_address) == 1)
         {
             return -1;
         }

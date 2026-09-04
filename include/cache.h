@@ -87,6 +87,13 @@ typedef struct CacheResult {
     Definition* m_init_t (const uint64_t passkey);
 
     /**
+     * @brief Frees the allocated memory for the cache environment and its associated buffers.
+     * @param def               Pointer to the struct holding the configuration values for the cache library.
+     * @warning This function should be called when the cache environment is no longer needed to prevent memory leaks. After calling this function, the `def` pointer should not be used.
+     */
+    void m_free_t (Definition* def);
+
+    /**
      * @brief Executes batch-mode sequence reads against multiple cache targets.
      * @param def               Pointer to the definition struct holding the configuration values for the cache library.
      * @param read_addresses    Array of 64-bit hardware address lines to look up.
