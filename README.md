@@ -99,8 +99,93 @@ There are currently two interfaces in construction:
 
 #### -> **C Interface**
 
-  (To Be Continued)
+The C interface is split across two headers: a **direct interface** for single accesses, and a **higher-level interface** for batched, multi-threaded accesses built on top of it.
 
-#### -> **C++ Interface**
+##### `direct_cache_interface.h`
 
-  (To Be Continued)
+Thin wrapper around the raw assembly functions, same inputs/outputs, just called with a normal C function signature instead of fixed registers.
+
+```txt
++-------------------------------------------------------------------------------------------------------------+
+  Function                                                                    |         Returns
+------------------------------------------------------------------------------------------------------------
+  uint64_t init_t (void)                                                     |  passkey (uint64_t)
+------------------------------------------------------------------------------------------------------------
+  uint64_t read_cache_t (uint64_t address, void *return_buffer,              |  0 - success
+                         size_t bytes_to_read, uint64_t passkey)             |  1 - cache miss
+                                                                              |  2 - invalid passkey
+                                                                              |  3 - cell miscalculation
+------------------------------------------------------------------------------------------------------------
+  uint64_t write_cache_t (uint64_t address_to_write, uint64_t passkey)       |  0 - success
+                                                                              |  2 - invalid passkey
++-------------------------------------------------------------------------------------------------------------+
+```
+
+**Things to be aware of:**
+
+- `write_cache_t` doesn't take the data to write as a separate parameter - the value stored is whatever lives at `address_to_write` itself. The address you write **is** the data source.
+- `bytes_to_read` is silently clamped to `CACHE_CELL_SIZE` (16 bytes). A cell only holds that many bytes, so asking for more doesn't get you more data - it gets you the first 16 bytes and nothing past that, rather than spilling into a neighboring cell's unrelated cached value.
+- Every call needs the `passkey` returned by `init_t()`. There's currently one global passkey per process, not one per `Definition*` - see `cache.h` below for where multiple concurrent caches come in.
+
+##### `cache.h`
+
+Adds batching and multi-threading on top of the direct interface. You get a `Definition*` handle per logical cache configuration, queue up several reads/writes on it, and explicitly `flush()` to actually execute them (possibly across several threads at once).
+
+```txt
++-------------------------------------------------------------------------------------------------------------+
+  Function                                                                    |         Returns
+------------------------------------------------------------------------------------------------------------
+  Definition* m_init_t (uint64_t passkey)                                    |  Definition* handle
+------------------------------------------------------------------------------------------------------------
+  CacheResult multi_read_cache_t (Definition* def,                          |  CacheResult (see below)
+                                   const uint64_t* read_addresses,
+                                   uint8_t address_count,
+                                   const size_t* byte_counts,
+                                   const void** return_buffers)
+------------------------------------------------------------------------------------------------------------
+  CacheResult multi_write_cache_t (Definition* def,                         |  CacheResult (see below)
+                                    const uint64_t* write_buffers,
+                                    int write_count)
+------------------------------------------------------------------------------------------------------------
+  enum Error_Type flush (Definition* def)                                    |  SUCCESS / CACHE_MISS /
+                                                                              |  INVALID_PASSKEY /
+                                                                              |  IMPLEMENTATION_ERROR /
+                                                                              |  NO_RETURN_BUFFER
+------------------------------------------------------------------------------------------------------------
+  void clean (Definition* def)                                               |  (none) - discards pending
+                                                                              |  accesses without running them
+------------------------------------------------------------------------------------------------------------
+  uint8_t multi_operation_compatible_t (uint64_t address_1,                 |  1 - same cache set (conflict)
+                                         uint64_t address_2)                 |  0 - different sets, safe
+                                                                              |  to queue together
++-------------------------------------------------------------------------------------------------------------+
+```
+
+Plus a set of getters/setters - `set_thread_count` / `get_thread_count` and `set_max_wait_size` / `get_max_wait_size` - to configure how many threads a batch can use and how many pending accesses can queue up before an automatic flush.
+
+**`CacheResult`**, returned by both `multi_read_cache_t` and `multi_write_cache_t`, is a tagged union (`Result<T, E>`-style):
+
+```c
+CacheResult result = multi_read_cache_t(def, addrs, count, byte_counts, buffers);
+if (result.is_ok) {
+    uint8_t completed  = result.value.ok.operations_completed;
+    size_t  bytes_read = result.value.ok.total_bytes;      // 0 for writes
+} else {
+    enum Error_Type code   = result.value.err.code;
+    uint64_t failed_address = result.value.err.failed_address;
+}
+```
+
+**Things to be aware of:**
+
+- **Queueing is not executing.** `multi_read_cache_t`/`multi_write_cache_t` only queue accesses into `def`'s internal buffer (or auto-flush if the queue fills up mid-call). If everything fits, nothing actually runs against the cache until you call `flush(def)` yourself - `return_buffers` won't have real data in them until after that call succeeds.
+- **`byte_counts` is per-address**, matching `read_addresses` index-for-index - it's not a single shared count for the whole batch, and it's still subject to the same `CACHE_CELL_SIZE` clamp as the direct interface.
+- **A queued address that collides with one already in the batch** (same cache set - see `multi_operation_compatible_t`) doesn't get queued; the function queues everything it safely can, and it's on you to check the returned count/`CacheResult` against what you asked for rather than assuming the whole batch was accepted.
+- **On a fatal error during `flush()`**, every address that hadn't been dispatched yet (not just the one that failed) is recorded rather than silently dropped, so nothing in a batch disappears without a trace - but only the *first* failure is surfaced directly through `CacheResult`'s `err` fields.
+- **There's currently no teardown function** for a `Definition*` - `clean()` only discards pending (not-yet-flushed) accesses, it doesn't free `def` itself. Keep that in mind for long-running processes that create many `Definition`s.
+
+---
+
+## License
+
+MIT
