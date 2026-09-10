@@ -1,0 +1,29 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ "*" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "*" ]
+
+jobs:
+  build-and-verify:
+    runs-on: archlinux-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Install System Dependencies
+      run: |
+        sudo pacman -Syu --noconfirm base-devel nasm valgrind
+
+    - name: Compile and Run Test Suite
+      run: |
+        make clean
+        make test
+
+    - name: Run Benchmark Suite
+      run: |
+        make benchmark
