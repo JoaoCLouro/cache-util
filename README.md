@@ -2,6 +2,92 @@
 
 ## Author: João Carrilho Louro
 
+[![Latest release](https://img.shields.io/github/v/release/JoaoCLouro/cache-util?label=release)](https://github.com/JoaoCLouro/cache-util/releases/tag/v1.0.0)
+
+---
+
+### **Installation**
+
+This project ships as a static library you build from source - there is currently no package manager distribution (apt, vcpkg, Conan, etc.), so installing means grabbing a release and running `make`.
+
+#### -> **Requirements**
+
+- **Linux, x86-64.** The cache engine is hand-written x86-64 assembly targeting the System V AMD64 ABI, so this will not build or run on ARM, or on Windows/macOS without an equivalent ABI layer.
+- **NASM** (Netwide Assembler) to assemble `cache.asm`.
+- **GCC** (or another C compiler that accepts the same flags in the `Makefile`) to build and link the C sources.
+- **GNU Make**.
+
+On Debian/Ubuntu, the toolchain is:
+
+```sh
+sudo apt update
+sudo apt install nasm gcc make
+```
+
+#### -> **Download a release**
+
+**Latest release: [`v1.0.0` - Stable Release](https://github.com/JoaoCLouro/cache-util/releases/tag/v1.0.0)**
+
+**Option A - from the browser:**
+
+1. Go to the [v1.0.0 release page](https://github.com/JoaoCLouro/cache-util/releases/tag/v1.0.0) (or the [Releases](https://github.com/JoaoCLouro/cache-util/releases) list for future versions).
+2. Under **Assets**, download **Source code (zip)** or **Source code (tar.gz)** (not the `main` branch - a release is a tagged, stable snapshot).
+3. Extract it:
+
+```sh
+tar -xzf cache-util-1.0.0.tar.gz
+cd cache-util-1.0.0
+```
+
+(If you downloaded the `.zip` instead, use `unzip cache-util-1.0.0.zip` and `cd` into the extracted folder.)
+
+**Option B - fully from the terminal:**
+
+```sh
+curl -L -o cache-util.tar.gz \
+  https://github.com/JoaoCLouro/cache-util/archive/refs/tags/v1.0.0.tar.gz
+tar -xzf cache-util.tar.gz
+cd cache-util-1.0.0
+```
+
+If you have the [GitHub CLI](https://cli.github.com/) installed:
+
+```sh
+gh release download v1.0.0 --repo JoaoCLouro/cache-util --archive=tar.gz
+tar -xzf cache-util-1.0.0.tar.gz
+cd cache-util-1.0.0/
+```
+
+Omit `v1.0.0` (and the flag entirely) to always grab whatever the latest release is, instead of pinning to this one:
+
+```sh
+gh release download --repo JoaoCLouro/cache-util --archive=tar.gz
+```
+
+> For any release after `v1.0.0`, the same commands work - just swap `v1.0.0`/`1.0.0` for the new tag. GitHub strips the leading `v` from the tag when naming the extracted folder (e.g. tag `v1.1.0` extracts to `cache-util-1.1.0`); run `ls` after extracting if you're ever unsure of the exact folder name.
+
+#### -> **Build**
+
+From the project root:
+
+```sh
+make
+```
+
+This assembles `src/cache.asm` with NASM, compiles the C sources under `src/`, and links everything into the `bin/` folder. Both `bin/` and `build/` are generated output - they aren't part of the release contents and are safe to delete/rebuild at any time.
+
+To build and run the test suite instead of (or in addition to) the library itself, check the `tests/` targets in the `Makefile` - e.g. `make test_cache`, `make test_direct_cache` - and run the resulting binary from `bin/`.
+
+#### -> **Using it in your own project**
+
+There's no `make install` step yet, so integration is manual:
+
+1. Copy (or `git submodule`) the `include/` folder's headers - `cache.h` and `direct_cache_interface.h` - somewhere your build can `-I` into.
+2. Link against the compiled objects/library produced under `bin/`, or add `src/cache.asm`, `src/cache.c`, and `src/direct_cache_interface.c` directly to your own build.
+3. Assemble `cache.asm` with NASM as part of your build step - it isn't optional, the C sources call directly into it and won't link without the resulting object file.
+
+See the [Interfaces](#interfaces) section below for what each header actually exposes.
+
 ---
 
 ### **Modules**
@@ -184,8 +270,6 @@ if (result.is_ok) {
 - **On a fatal error during `flush()`**, every address that hadn't been dispatched yet (not just the one that failed) is recorded rather than silently dropped, so nothing in a batch disappears without a trace - but only the *first* failure is surfaced directly through `CacheResult`'s `err` fields.
 - **There's currently no teardown function** for a `Definition*` - `clean()` only discards pending (not-yet-flushed) accesses, it doesn't free `def` itself. Keep that in mind for long-running processes that create many `Definition`s.
 
----
+#### -> **C++ Interface**
 
-## License
-
-MIT
+  (To Be Continued)
