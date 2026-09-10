@@ -178,10 +178,7 @@ Besides cache size you can also change the number of **cache ways**, **despite b
 
 ### **Interfaces**
 
-There are currently two interfaces in construction:
-
-- A **C** procedural interface oriented to low level performance code with integration with other technologies and languages;
-- A **C++** object oriented interface for low level systems / high performance c++ code;
+This project exposes a **C** procedural interface, oriented at low-level performance code with integration into other technologies and languages.
 
 #### -> **C Interface**
 
@@ -269,7 +266,3 @@ if (result.is_ok) {
 - **A queued address that collides with one already in the batch** (same cache set - see `multi_operation_compatible_t`) doesn't get queued; the function queues everything it safely can, and it's on you to check the returned count/`CacheResult` against what you asked for rather than assuming the whole batch was accepted.
 - **On a fatal error during `flush()`**, every address that hadn't been dispatched yet (not just the one that failed) is recorded rather than silently dropped, so nothing in a batch disappears without a trace - but only the *first* failure is surfaced directly through `CacheResult`'s `err` fields.
 - **There's currently no teardown function** for a `Definition*` - `clean()` only discards pending (not-yet-flushed) accesses, it doesn't free `def` itself. Keep that in mind for long-running processes that create many `Definition`s.
-
-#### -> **C++ Interface**
-
-  (To Be Continued)
